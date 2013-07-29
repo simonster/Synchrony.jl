@@ -28,3 +28,9 @@ out2 = hcat(flipud(output)...)
 (sXY, sXX, sYY) = xspec(in1, in2, fs=1000)
 @assert sXX == out1
 @assert sYY == out2
+@assert sXY[:, 1] == conj(sXY[:, 2])
+
+# Test multiple channel cross-spectrum
+(xs, s) = xspec(cat(3, input[1], input[2]), fs=1000, trialavg=false)
+@assert all(abs(squeeze(s, 2) - out1) .< 7*eps())
+@assert all(abs(xs[:] - sXY[:, 1]) .< 7*eps())

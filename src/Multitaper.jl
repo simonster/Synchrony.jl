@@ -33,9 +33,9 @@ for (fn, invars, allocdims, outtype) in ((:psd, (:A,), (), (:(eltype(A)),)),
 		function $fn{T<:FFTW.fftwNumber}($([:($x::AbstractArray{T}) for x in invars]...);
 			                             tapers::Matrix=dpss(size($(invars[1]), 1), 4), fs::Real=1.0,
 			                             pad::Union(Bool, Int)=true)
-			npadded = getpadding(size(A, 1), pad)
-			outsz = tuple(div(npadded, 2)+1, size(A)[2:end]...)
-			tmp = zeros(complextype(eltype(A)), npadded, prod(size(A)[2:end])::Int, $(allocdims...))
+			nfft = getpadding(size(A, 1), pad)
+			outsz = tuple(div(nfft, 2)+1, size(A)[2:end]...)
+			tmp = zeros(complextype(eltype(A)), nfft, prod(size(A)[2:end])::Int, $(allocdims...))
 			$(Expr(:block, [:($(outvars[i]) = zeros($(outtype[i]), outsz)) for i = 1:length(outtype)]...))
 			$(Expr(:call, symbol(string(fn, "!")), outvars..., :tmp, invars..., :tapers, :fs))
 		end
@@ -117,7 +117,7 @@ end
 
 # Estimate coherence
 function coherence{T<:FFTW.fftwNumber}(A::AbstractArray{T}, B::AbstractArray{T},
-	                                   tapers::Matrix=dpss(size(data, 1), 4);
+	                                   tapers::Matrix=dpss(size(A, 1), 4);
 	                                   pad::Union(Bool, Int)=true)
 	sXY, sXX, sYY = xspec(A, B; tapers::Matrix=tapers, pad=pad)
 	for i = 1:length(sXY)
@@ -130,37 +130,46 @@ end
 # Functionality for multiple channels
 #
 # A is time x trials x channels
-function xspec{T<:FFTW.fftwNumber}(A::AbstractArray{T, 3}, tapers::Matrix=dpss(size(data, 1), 4);
-	                               pad::Union(Bool, Int)=true, trialavg::Bool=true)
-	npadded = getpadding(size(A, 1), pad)
-	X = mtfft(A, tapers)
-	combs = [(i, j) for i = 1:size(A, 3)-1, j = i+1:size(A, 3)]
-	s = scale!(sqsum(X, 4), 1/size(A, 4))
+function xspec{T<:FFTW.fftwNumber}(A::AbstractArray{T, 3}, tapers::Matrix=dpss(size(A, 1), 4);
+	                               pad::Union(Bool, Int)=true, trialavg::Bool=true, fs::Real=1.0)
+	nfft = getpadding(size(A, 1), pad)
+	X = mtrfft(A, tapers, nfft)
+
+	combs = Array((Int, Int), binomial(size(A, 3), 2))
+	k = 0
+	for i = 1:size(A, 3)-1, j = i+1:size(A, 3)
+		combs[k += 1] = (i, j)
+	end
+
+	s = squeeze(sqsum(X, 4), 4)
 	if trialavg
-		s = scale!(sqsum(s, 2), 1/size(s, 2))
+		s = scalespectrum!(sum(s, 2), nfft, fs*size(X, 2)*size(X, 4))
+
 		X = sum(X, 4)
-		xs = zeros(size(X, 1), 1, length(combs))
+		xs = zeros(complextype(eltype(A)), size(X, 1), 1, length(combs))
 		for k = 1:length(combs)
 			ch1, ch2 = combs[k]
-			for j = 1:size(X,2), i = 1:size(X, 1)
+			for j = 1:size(X, 2), i = 1:size(X, 1)
 				xs[i, 1, k] += dot(X[i, j, ch1, 1], X[i, j, ch2, 1])
 			end
 		end
-		scale!(xs, 1./(size(X, 2)*size(X, 4)))
+		scalespectrum!(xs, nfft, fs*size(X, 2)*size(X, 4))
 	else
-		xs = zeros(size(X, 1), size(X, 2), length(combs))
-		for l = 1:size(X,4), k = 1:length(combs)
+		scalespectrum!(s, nfft, fs*size(X, 4))
+
+		xs = zeros(complextype(eltype(A)), size(X, 1), size(X, 2), length(combs))
+		for l = 1:size(X, 4), k = 1:length(combs)
 			ch1, ch2 = combs[k]
-			for j = 1:size(X,2), i = 1:size(X, 1)
+			for j = 1:size(X, 2), i = 1:size(X, 1)
 				xs[i, j, k] += dot(X[i, j, ch1, l], X[i, j, ch2, l])
 			end
 		end
-		scale!(xs, 1/size(X, 4))
+		scalespectrum!(xs, nfft, fs*size(X, 4))
 	end
 	(xs, s, combs)
 end
 
-function coherence{T<:FFTW.fftwNumber}(A::AbstractArray{T, 3}, tapers::Matrix=dpss(size(data, 1), 4);
+function coherence{T<:FFTW.fftwNumber}(A::AbstractArray{T, 3}, tapers::Matrix=dpss(size(A, 1), 4);
 	                                   pad::Union(Bool, Int)=true, trialavg::Bool=true)
 	(xs, s, combs) = coherence(A, tapers::Matrix=tapers, pad=pad, trialavg=trialavg)
 	for k = 1:length(combs), j = 1:size(A, 2), i = 1:size(A, 1)
@@ -174,17 +183,19 @@ end
 # Helper functions
 #
 # Perform tapered FFT
-function mtfft{T<:FFTW.fftwNumber,N}(A::AbstractArray{T,N}, tapers::Matrix)
+function mtrfft{T<:FFTW.fftwNumber,N}(A::AbstractArray{T,N}, tapers::Matrix, nfft::Int=size(A, 1))
+	n = size(A, 1)
 	sz = size(A)
-	l = length(A)
 
-	X = Array(eltype(A), sz..., size(tapers, 2))::Array{T,N+1}
-	for i = 1:size(tapers, 2)
-		t = (i-1)*l
-		for j = 0:n:length(A)-2, k = 1:size(tapers, 1)
-			X[j+k+l] = A[j+k+l].*tapers[k, i]
+	X = Array(eltype(A), nfft, sz[2:end]..., size(tapers, 2))::Array{T,N+1}
+	Xstride = stride(X, N+1)
+	for i = 1:size(tapers, 2), j = 1:div(length(A), n)
+		Aoff = (j-1)*n
+		Xoff = (j-1)*nfft+Xstride*(i-1)
+		for k = 1:n
+			X[Xoff+k] = A[Aoff+k].*tapers[k, i]
 		end
-		X[j+l+(n+1:nout)] = zero(eltype(y))
+		X[Xoff+(n+1:nfft)] = zero(eltype(X))
 	end
 	rfft(X, 1)
 end
@@ -192,11 +203,14 @@ end
 getpadding(n::Int, padparam::Bool) = padparam ? nextpow2(n) : n
 getpadding(n::Int, padparam::Int) = padparam
 
-function scalespectrum!(spectrum::Union(Vector, Matrix), n::Int, divisor::Real)
+function scalespectrum!(spectrum::AbstractArray, n::Int, divisor::Real)
 	scale!(spectrum, 2/divisor)
-	spectrum[1, :] /= 2
-	if iseven(n)
-		spectrum[end, :] /= 2
+	s = size(spectrum, 1)
+	for i = 1:div(length(spectrum), s)
+		spectrum[(i-1)*s+1] /= 2
+		if iseven(n)
+			spectrum[i*s] /= 2
+		end
 	end
 	spectrum
 end
