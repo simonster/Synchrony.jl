@@ -13,7 +13,7 @@ for i = 1:2
 	input[i] = readdlm("test$(i)_in.txt", '\t')
 	output[i] = psd(input[i], fs=1000)
 	truth = readdlm("test$(i)_out.txt", '\t')
-	@assert all(abs(output[i] - truth) .< 7*eps())
+	@assert max(abs(output[i] - truth)) < 7*eps()
 end
 
 # Ensure that psd gvies the same result when applied across multiple dimensions
@@ -29,8 +29,17 @@ out2 = hcat(flipud(output)...)
 @assert sXX == out1
 @assert sYY == out2
 @assert sXY[:, 1] == conj(sXY[:, 2])
+c = coherence(in1, in2, fs=1000)
+truth = readdlm("coherence_mag.txt", '\t')
+@assert max(abs(abs(c) .- truth)) < sqrt(eps())
+truth = readdlm("coherence_phi.txt", '\t')[2:end-1]
+@assert max(abs(angle(c[2:end-1, :]) - [truth -truth])) < sqrt(eps())
 
 # Test multiple channel cross-spectrum
-(xs, s) = xspec(cat(3, input[1], input[2]), fs=1000, trialavg=false)
-@assert all(abs(squeeze(s, 2) - out1) .< 7*eps())
-@assert all(abs(xs[:] - sXY[:, 1]) .< 7*eps())
+in3 = cat(3, input[1], input[2])
+(xs, s) = xspec(in3, fs=1000)
+@assert max(abs(squeeze(s, 2) - out1)) < 7*eps()
+@assert max(abs(xs[:] - sXY[:, 1])) < 7*eps()
+(c2, s) = coherence(in3, fs=1000)
+@assert max(abs(real(c2[:]) - real(c[:, 1]))) < sqrt(eps())
+@assert max(abs(imag(c2[:]) - imag(c[:, 1]))) < sqrt(eps())

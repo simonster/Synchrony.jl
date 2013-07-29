@@ -116,24 +116,25 @@ function xspec!(sXY, sXX, sYY, tmp, A, B, tapers, fs)
 end
 
 # Estimate coherence
-function coherence{T<:FFTW.fftwNumber}(A::AbstractArray{T}, B::AbstractArray{T},
-	                                   tapers::Matrix=dpss(size(A, 1), 4);
-	                                   pad::Union(Bool, Int)=true)
-	sXY, sXX, sYY = xspec(A, B; tapers::Matrix=tapers, pad=pad)
+function coherence{T<:FFTW.fftwNumber}(A::AbstractArray{T}, B::AbstractArray{T};
+	                                   tapers::Matrix=dpss(size(A, 1), 4),
+	                                   pad::Union(Bool, Int)=true, fs::Real=1.0)
+	sXY, sXX, sYY = xspec(A, B; tapers=tapers, pad=pad, fs=fs)
 	for i = 1:length(sXY)
-		sXX[i] = abs(sXY[i])/sqrt(sXX[i]*sYY[i])
+		sXY[i] = sXY[i]/sqrt(sXX[i]*sYY[i])
 	end
-	sXX
+	sXY
 end
 
 #
 # Functionality for multiple channels
 #
 # A is time x trials x channels
-function xspec{T<:FFTW.fftwNumber}(A::AbstractArray{T, 3}, tapers::Matrix=dpss(size(A, 1), 4);
-	                               pad::Union(Bool, Int)=true, trialavg::Bool=true, fs::Real=1.0)
+function xspec{T<:FFTW.fftwNumber}(A::AbstractArray{T, 3}; tapers::Matrix=dpss(size(A, 1), 4),
+	                               pad::Union(Bool, Int)=true, fs::Real=1.0)
 	nfft = getpadding(size(A, 1), pad)
 	X = mtrfft(A, tapers, nfft)
+	scalespectrum!(X, nfft, fs*size(X, 4), true)
 
 	combs = Array((Int, Int), binomial(size(A, 3), 2))
 	k = 0
@@ -142,41 +143,29 @@ function xspec{T<:FFTW.fftwNumber}(A::AbstractArray{T, 3}, tapers::Matrix=dpss(s
 	end
 
 	s = squeeze(sqsum(X, 4), 4)
-	if trialavg
-		s = scalespectrum!(sum(s, 2), nfft, fs*size(X, 2)*size(X, 4))
-
-		X = sum(X, 4)
-		xs = zeros(complextype(eltype(A)), size(X, 1), 1, length(combs))
-		for k = 1:length(combs)
-			ch1, ch2 = combs[k]
-			for j = 1:size(X, 2), i = 1:size(X, 1)
-				xs[i, 1, k] += dot(X[i, j, ch1, 1], X[i, j, ch2, 1])
-			end
+	xs = zeros(complextype(eltype(A)), size(X, 1), size(X, 2), length(combs))
+	for l = 1:size(X, 4), k = 1:length(combs)
+		ch1, ch2 = combs[k]
+		for j = 1:size(X, 2), i = 1:size(X, 1)
+			xs[i, j, k] += dot(X[i, j, ch1, l], X[i, j, ch2, l])
 		end
-		scalespectrum!(xs, nfft, fs*size(X, 2)*size(X, 4))
-	else
-		scalespectrum!(s, nfft, fs*size(X, 4))
-
-		xs = zeros(complextype(eltype(A)), size(X, 1), size(X, 2), length(combs))
-		for l = 1:size(X, 4), k = 1:length(combs)
-			ch1, ch2 = combs[k]
-			for j = 1:size(X, 2), i = 1:size(X, 1)
-				xs[i, j, k] += dot(X[i, j, ch1, l], X[i, j, ch2, l])
-			end
-		end
-		scalespectrum!(xs, nfft, fs*size(X, 4))
 	end
+
 	(xs, s, combs)
 end
 
-function coherence{T<:FFTW.fftwNumber}(A::AbstractArray{T, 3}, tapers::Matrix=dpss(size(A, 1), 4);
-	                                   pad::Union(Bool, Int)=true, trialavg::Bool=true)
-	(xs, s, combs) = coherence(A, tapers::Matrix=tapers, pad=pad, trialavg=trialavg)
-	for k = 1:length(combs), j = 1:size(A, 2), i = 1:size(A, 1)
-		ch1, ch2 = combs[k]
-		xs[i, j, k] = abs(xs[i, j, k])/sqrt(s[i, j, ch1]*s[i, j, ch2])
+function coherence{T<:FFTW.fftwNumber}(A::AbstractArray{T, 3}; tapers::Matrix=dpss(size(A, 1), 4),
+	                                   pad::Union(Bool, Int)=true, fs::Real=1.0,
+	                                   trialavg::Bool=true)
+	(xs, s, combs) = xspec(A; tapers=tapers, pad=pad, fs=fs)
+	if trialavg
+		xs = mean(xs, 2)
 	end
-	(xs, combs)
+	for k = 1:length(combs), j = 1:size(xs, 2), i = 1:size(xs, 1)
+		ch1, ch2 = combs[k]
+		xs[i, j, k] = xs[i, j, k]/sqrt(s[i, j, ch1]*s[i, j, ch2])
+	end
+	(xs, s, combs)
 end
 
 #
@@ -203,13 +192,18 @@ end
 getpadding(n::Int, padparam::Bool) = padparam ? nextpow2(n) : n
 getpadding(n::Int, padparam::Int) = padparam
 
-function scalespectrum!(spectrum::AbstractArray, n::Int, divisor::Real)
-	scale!(spectrum, 2/divisor)
+# Scale real part of spectrum to satisfy Parseval's theorem
+# If sq is true, scale by sqrt of values (for FFTs)
+function scalespectrum!(spectrum::AbstractArray, n::Int, divisor::Real, sq::Bool=false)
+	d = 2/divisor
+	if sq; d = sqrt(d); end
+	scale!(spectrum, d)
+
 	s = size(spectrum, 1)
 	for i = 1:div(length(spectrum), s)
-		spectrum[(i-1)*s+1] /= 2
+		spectrum[(i-1)*s+1] /= sq ? sqrt(2) : 2
 		if iseven(n)
-			spectrum[i*s] /= 2
+			spectrum[i*s] /= sq ? sqrt(2) : 2
 		end
 	end
 	spectrum
