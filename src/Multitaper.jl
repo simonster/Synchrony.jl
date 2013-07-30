@@ -1,7 +1,7 @@
 module Multitaper
 using NumericExtensions
 
-export PowerSpectrum, CrossSpectrum, Coherence, dpss, multitaper, psd, xspec, coherence
+export PowerSpectrum, CrossSpectrum, Coherence, dpss, multitaper, psd, xspec, coherence, allpairs, frequencies
 
 #
 # Statistics computed on transformed data
@@ -61,7 +61,7 @@ finish(s::PowerSpectrum, nsamples) = scale!(s.x, 1/nsamples)
 # Cross Spectrum
 @pairwisestat CrossSpectrum Complex{T}
 @accumulatebypair CrossSpectrum j i x y begin
-    s.x[j, i] += dot(x, y)
+    s.x[j, i] += conj(x)*y
 end
 finish(s::CrossSpectrum, nsamples) = scale!(s.x, 1/nsamples)
 
@@ -121,14 +121,26 @@ function dpss(n::Int, nw::Real, ntapers::Int=iceil(2*nw)-1)
     scale!(v, sgn)
 end
 
+# Compute frequencies based on length of input
+frequencies(nfft::Int, fs::Real=1.0) = (0:div(nfft, 2))*(fs/nfft)
+function frequencies(nfft::Int, fs::Real, fmin::Real, fmax::Real=Inf)
+    allfreq = frequencies(nfft, fs)
+    allfreq[searchsortedfirst(allfreq, fmin):(fmax == Inf ? length(allfreq) : searchsortedlast(allfreq, fmax))]
+end
+frequencies{T<:Real}(A::Union(AbstractVector{T}, AbstractMatrix{T}, AbstractArray{T,3}),
+                     fs::Real=1.0, fmin::Real=0.0, fmax::Real=Inf) =
+    frequencies(nextpow2(size(A, 1)), fs, fmin, fmax)
+
 # Perform tapered FFT along first dimension for each channel along second dimension,
 # accumulating along third dimension
 function multitaper{T<:Real}(A::Union(AbstractVector{T}, AbstractMatrix{T}, AbstractArray{T,3}),
-                             stats::(TransformStatistic...);
-                             tapers::Matrix=dpss(size(A, 1), 4),
-                             pad::Union(Bool, Int)=true, fs::Real=1.0)
+                             stats::(TransformStatistic, TransformStatistic...);
+                             tapers::Matrix=dpss(size(A, 1), 4), nfft::Int=nextpow2(size(A, 1)),
+                             fs::Real=1.0, fmin::Real=0.0, fmax::Real=Inf)
+    allfreq = frequencies(nfft, fs)
+    frange = searchsortedfirst(allfreq, fmin):(fmax == Inf ? length(allfreq) : searchsortedlast(allfreq, fmax))
+
     n = size(A, 1)
-    nfft = getpadding(size(A, 1), pad)
     nout = nfft >> 1 + 1
     zerorg = n+1:nfft
     ntapers = size(tapers, 2)
@@ -137,66 +149,74 @@ function multitaper{T<:Real}(A::Union(AbstractVector{T}, AbstractMatrix{T}, Abst
     multiplier = sqrt(2/fs)
 
     for stat in stats
-        init(stat, nout, nchannels, nsamples)
+        init(stat, length(frange), nchannels, nsamples)
     end
 
     fftin = Array(T, nfft, size(A, 2))
     fftout = Array(Complex{T}, nout, size(A, 2))
+    #fftview = sub(fftout, frange, 1:size(A,2))
+    fftview = zeros(Complex{T}, length(frange), size(A, 2))
 
     p = FFTW.Plan(fftin, fftout, 1, FFTW.ESTIMATE, FFTW.NO_TIMELIMIT)
+    scalelast = iseven(nfft) && frange[end] == length(allfreq)
 
     for i = 1:ntapers, j = 1:size(A, 3)
         for k = 1:nchannels
             for l = 1:n
                 fftin[l, k] = A[l, k, j].*tapers[l, i]
             end
-            fftin[zerorg, k] = zero(eltype(fftin))
+            for l = n+1:nfft
+                fftin[l, k] = zero(T)
+            end
         end
 
         # Exectute rfft with output preallocated
         FFTW.execute(T, p.plan)
 
         # Scale output to conform to Parseval's theorem
-        scale!(fftout, multiplier)
         for k = 1:nchannels
-            fftout[1, k] /= sqrt(2)
-            if iseven(nfft)
-                fftout[nout, k] /= sqrt(2)
+            for l = 1:length(frange)
+                fftview[l, k] = fftout[frange[l], k]*multiplier
+            end
+            if frange[1] == 1
+                fftview[1, k] /= sqrt(2)
+            end
+            if scalelast
+                fftview[end, k] /= sqrt(2)
             end
         end
 
         # Accumulate
         for stat in stats
-            accumulate(stat, fftout)
+            accumulate(stat, fftview)
         end
     end
 
     [finish(stat, nsamples) for stat in stats]
 end
+
+# Calling with types instead of instances
 multitaper{T<:Real}(A::Union(AbstractVector{T}, AbstractMatrix{T}, AbstractArray{T,3}),
-                    stat::TransformStatistic; tapers::Matrix=dpss(size(A, 1), 4),
-                    pad::Union(Bool, Int)=true, fs::Real=1.0) =
-                    multitaper(A, (stat,); tapers=tapers, pad=pad, fs=fs)
+                    stat::(DataType, DataType...); tapers::Matrix=dpss(size(A, 1), 4),
+                    nfft::Int=nextpow2(size(A, 1)), fs::Real=1.0, fmin::Real=0.0, fmax::Real=Inf) =
+    multitaper(A, tuple([x() for x in stat]...); tapers=tapers, nfft=nfft, fs=fs, fmin=fmin, fmax=fmax)
+
+# Calling with a single type or instance
+multitaper{T<:Real,S<:TransformStatistic}(A::Union(AbstractVector{T}, AbstractMatrix{T}, AbstractArray{T,3}),
+                                          stat::Union(S, Type{S}); tapers::Matrix=dpss(size(A, 1), 4),
+                                          nfft::Int=nextpow2(size(A, 1)), fs::Real=1.0, fmin::Real=0.0, fmax::Real=Inf) =
+    multitaper(A, (stat,); tapers=tapers, nfft=nfft, fs=fs, fmin=fmin, fmax=fmax)[1]
 
 #
-# Basic functionality, for single series and pairs
+# Convenience functions
 #
 # Estimate power spectral density
-psd{T<:Real}(A::AbstractArray{T}; tapers::Matrix=dpss(size(A, 1), 4),
-             pad::Union(Bool, Int)=true, fs::Real=1.0) =
-    multitaper(A, (PowerSpectrum{T}(),); tapers=tapers, pad=pad, fs=fs)[1]
-
-# Estimate cross-spectrum
-xspec{T<:Real}(A::Vector{T}, B::Vector{T};
-                 tapers::Matrix=dpss(size(A, 1), 4),
-                 pad::Union(Bool, Int)=true, fs::Real=1.0) =
-    multitaper(hcat(A, B), (CrossSpectrum{T}(),); tapers=tapers, pad=pad, fs=fs)[1]
-
-# Estimate coherence
-coherence{T<:Real}(A::Vector{T}, B::Vector{T};
-                   tapers::Matrix=dpss(size(A, 1), 4),
-                   pad::Union(Bool, Int)=true, fs::Real=1.0) =
-    multitaper(hcat(A, B), (Coherence{T}(),); tapers=tapers, pad=pad, fs=fs)[1]
+psd{T<:Real}(A::AbstractArray{T}; kw...) =
+    multitaper(A, (PowerSpectrum{T}(),); kw...)[1]
+xspec{T<:Real}(A::Vector{T}, B::Vector{T}; kw...) =
+    multitaper(hcat(A, B), (CrossSpectrum{T}(),); kw...)[1]
+coherence{T<:Real}(A::Vector{T}, B::Vector{T}; kw...) =
+    multitaper(hcat(A, B), (Coherence{T}(),); kw...)[1]
 
 #
 # Functionality for multiple channels
