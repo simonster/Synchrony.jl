@@ -26,8 +26,8 @@ out2 = hcat(flipud(output)...)
 
 # Test cross-spectrum
 (sXY, sXX, sYY) = xspec(in1, in2, fs=1000)
-@assert sXX == out1
-@assert sYY == out2
+@assert max(abs(sXX - out1)) < 7*eps()
+@assert max(abs(sYY - out2)) < 7*eps()
 @assert sXY[:, 1] == conj(sXY[:, 2])
 c = coherence(in1, in2, fs=1000)
 truth = readdlm("coherence_mag.txt", '\t')
@@ -37,9 +37,11 @@ truth = readdlm("coherence_phi.txt", '\t')[2:end-1]
 
 # Test multiple channel cross-spectrum
 in3 = cat(3, input[1], input[2])
-(xs, s) = xspec(in3, fs=1000)
+f = mtrfft(in3, fs=1000)
+xs = xspec(f, [(1, 2)])
+s = psd(f)
 @assert max(abs(squeeze(s, 2) - out1)) < 7*eps()
 @assert max(abs(xs[:] - sXY[:, 1])) < 7*eps()
-(c2, s) = coherence(in3, fs=1000)
+c2 = coherence(f, [(1, 2)])
 @assert max(abs(real(c2[:]) - real(c[:, 1]))) < sqrt(eps())
 @assert max(abs(imag(c2[:]) - imag(c[:, 1]))) < sqrt(eps())
