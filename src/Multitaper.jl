@@ -1,8 +1,106 @@
 module Multitaper
 using NumericExtensions
 
-export dpss, psd, xspec, coherence, mtrfft
+export PowerSpectrum, CrossSpectrum, Coherence, dpss, multitaper, psd, xspec, coherence
 
+#
+# Statistics computed on transformed data
+#
+abstract TransformStatistic{T<:Real}
+
+# Convenience functions for pairwise statistics
+abstract PairwiseTransformStatistic{T<:Real} <: TransformStatistic{T}
+macro pairwisestat(name, xtype)
+    esc(quote
+        type $name{T<:Real} <: PairwiseTransformStatistic{T}
+            pairs::Vector{(Int, Int)}
+            x::Array{$xtype, 2}
+            $name() = new()
+            $name(pairs::Vector{(Int, Int)}) = new(pairs)
+        end
+        $name() = $name{Float64}()
+    end)
+end
+function init{T}(s::PairwiseTransformStatistic{T}, nout, nchannels, nsamples)
+    if !isdefined(s, :pairs); s.pairs = allpairs(nchannels); end
+    s.x = zeros(eltype(fieldtype(s, :x)), nout, length(s.pairs))
+end
+macro accumulatebypair(t, j, i, x, y, code)
+    quote
+        function $(esc(:accumulate))(s::$t, fftout)
+            pairs = s.pairs
+            for $i = 1:length(pairs)
+                ch1, ch2 = pairs[$i]
+                for $j = 1:size(fftout, 1)
+                    $x = fftout[$j, ch1]
+                    $y = fftout[$j, ch2]
+                    $code
+                end
+            end
+        end
+    end
+end
+
+# Power Spectrum
+type PowerSpectrum{T<:Real} <: TransformStatistic{T}
+    x::Array{T, 2}
+    PowerSpectrum() = new()
+end
+PowerSpectrum() = PowerSpectrum{Float64}()
+function init{T}(s::PowerSpectrum{T}, nout, nchannels, nsamples)
+    s.x = zeros(T, nout, nchannels)
+end
+function accumulate(s::PowerSpectrum, fftout)
+    A = s.x
+    for i = 1:length(fftout)
+        A[i] += abs2(fftout[i])
+    end
+end
+finish(s::PowerSpectrum, nsamples) = scale!(s.x, 1/nsamples)
+
+# Cross Spectrum
+@pairwisestat CrossSpectrum Complex{T}
+@accumulatebypair CrossSpectrum j i x y begin
+    s.x[j, i] += dot(x, y)
+end
+finish(s::CrossSpectrum, nsamples) = scale!(s.x, 1/nsamples)
+
+# Coherence
+type Coherence{T<:Real} <: PairwiseTransformStatistic{T}
+    pairs::Vector{(Int, Int)}
+    psd::PowerSpectrum{T}
+    xspec::CrossSpectrum{T}
+    Coherence() = new()
+    Coherence(pairs::Vector{(Int, Int)}) = new(pairs)
+end
+Coherence() = Coherence{Float64}()
+function init{T}(s::Coherence{T}, nout, nchannels, nsamples)
+    if !isdefined(s, :pairs); s.pairs = allpairs(nchannels); end
+    s.psd = PowerSpectrum{T}()
+    s.xspec = CrossSpectrum{T}(s.pairs)
+    init(s.psd, nout, nchannels, nsamples)
+    init(s.xspec, nout, nchannels, nsamples)
+end
+function accumulate(s::Coherence, fftout)
+    accumulate(s.psd, fftout)
+    accumulate(s.xspec, fftout)
+end
+function finish(s::Coherence, nsamples)
+    psd = finish(s.psd, nsamples)
+    xspec = finish(s.xspec, nsamples)
+    pairs = s.pairs
+    for i = 1:length(pairs)
+        ch1, ch2 = pairs[i]
+        for j = 1:size(xspec, 1)
+            xspec[j, i] = xspec[j, i]/sqrt(psd[j, ch1]*psd[j, ch2])
+        end
+    end
+    xspec
+end
+
+#
+# Core functionality
+#
 # Compute discrete prolate spheroid sequences (Slepian tapers)
 function dpss(n::Int, nw::Real, ntapers::Int=iceil(2*nw)-1)
     # Construct symmetric tridiagonal matrix
@@ -23,91 +121,82 @@ function dpss(n::Int, nw::Real, ntapers::Int=iceil(2*nw)-1)
     scale!(v, sgn)
 end
 
+# Perform tapered FFT along first dimension for each channel along second dimension,
+# accumulating along third dimension
+function multitaper{T<:Real}(A::Union(AbstractVector{T}, AbstractMatrix{T}, AbstractArray{T,3}),
+                             stats::(TransformStatistic...);
+                             tapers::Matrix=dpss(size(A, 1), 4),
+                             pad::Union(Bool, Int)=true, fs::Real=1.0)
+    n = size(A, 1)
+    nfft = getpadding(size(A, 1), pad)
+    nout = nfft >> 1 + 1
+    zerorg = n+1:nfft
+    ntapers = size(tapers, 2)
+    nchannels = size(A, 2)
+    nsamples = size(A, 3)*ntapers
+    multiplier = sqrt(2/fs)
+
+    for stat in stats
+        init(stat, nout, nchannels, nsamples)
+    end
+
+    fftin = Array(T, nfft, size(A, 2))
+    fftout = Array(Complex{T}, nout, size(A, 2))
+
+    p = FFTW.Plan(fftin, fftout, 1, FFTW.ESTIMATE, FFTW.NO_TIMELIMIT)
+
+    for i = 1:ntapers, j = 1:size(A, 3)
+        for k = 1:nchannels
+            for l = 1:n
+                fftin[l, k] = A[l, k, j].*tapers[l, i]
+            end
+            fftin[zerorg, k] = zero(eltype(fftin))
+        end
+
+        # Exectute rfft with output preallocated
+        FFTW.execute(T, p.plan)
+
+        # Scale output to conform to Parseval's theorem
+        scale!(fftout, multiplier)
+        for k = 1:nchannels
+            fftout[1, k] /= sqrt(2)
+            if iseven(nfft)
+                fftout[nout, k] /= sqrt(2)
+            end
+        end
+
+        # Accumulate
+        for stat in stats
+            accumulate(stat, fftout)
+        end
+    end
+
+    [finish(stat, nsamples) for stat in stats]
+end
+multitaper{T<:Real}(A::Union(AbstractVector{T}, AbstractMatrix{T}, AbstractArray{T,3}),
+                    stat::TransformStatistic; tapers::Matrix=dpss(size(A, 1), 4),
+                    pad::Union(Bool, Int)=true, fs::Real=1.0) =
+                    multitaper(A, (stat,); tapers=tapers, pad=pad, fs=fs)
+
 #
 # Basic functionality, for single series and pairs
 #
 # Estimate power spectral density
-function psd{T<:Real,N}(A::AbstractArray{T,N}; tapers::Matrix=dpss(size(A, 1), 4),
-                        pad::Union(Bool, Int)=true, fs::Real=1.0)
-    n = size(A, 1)
-    nfft = getpadding(size(A, 1), pad)
-    tmp = zeros(complextype(eltype(A)), nfft, prod(size(A)[2:end])::Int)
-    out = zeros(eltype(A), div(nfft, 2)+1, size(A)[2:end]...)
-
-    nout = size(out, 1)
-    zerorg = n+1:nfft
-    ntapers = size(tapers, 2)
-    perform_fft! = plan_fft!(tmp, 1)
-
-    for i = 1:ntapers
-        for j = 1:div(length(A), n)
-            Aoff = (j-1)*n
-            for k = 1:n
-                tmp[k, j] = A[Aoff+k].*tapers[k, i]
-            end
-            tmp[zerorg, j] = zero(eltype(tmp))
-        end
-        
-        perform_fft!(tmp)
-
-        for j = 1:div(length(out), nout)
-            outoff = (j-1)*nout
-            for k = 1:nout
-                out[outoff+k] += abs2(tmp[k, j])
-            end
-        end
-    end
-    scalespectrum!(out, nfft, fs*ntapers)
-end
+psd{T<:Real}(A::AbstractArray{T}; tapers::Matrix=dpss(size(A, 1), 4),
+             pad::Union(Bool, Int)=true, fs::Real=1.0) =
+    multitaper(A, (PowerSpectrum{T}(),); tapers=tapers, pad=pad, fs=fs)[1]
 
 # Estimate cross-spectrum
-function xspec{T<:Real,N}(A::AbstractArray{T,N}, B::AbstractArray{T,N},
-                          accumulator::BinaryFunctor=Dot();
-                          tapers::Matrix=dpss(size(A, 1), 4),
-                          pad::Union(Bool, Int)=true, fs::Real=1.0)
-    if size(A) != size(B)
-        throw(Base.DimensionMismatch("A and B must be the same size"))
-    end
-    n = size(A, 1)
-    nfft = getpadding(size(A, 1), pad)
-    ffttype = complextype(eltype(A))
-    tmp = zeros(ffttype, nfft, prod(size(A)[2:end])::Int, 2)
-    sXY = zeros(result_type(accumulator, ffttype, ffttype), div(nfft, 2)+1, size(A)[2:end]...)
-    sXX = zeros(eltype(A), div(nfft, 2)+1, size(A)[2:end]...)
-    sYY = zeros(eltype(A), div(nfft, 2)+1, size(A)[2:end]...)
+xspec{T<:Real}(A::Vector{T}, B::Vector{T};
+                 tapers::Matrix=dpss(size(A, 1), 4),
+                 pad::Union(Bool, Int)=true, fs::Real=1.0) =
+    multitaper(hcat(A, B), (CrossSpectrum{T}(),); tapers=tapers, pad=pad, fs=fs)[1]
 
-    n = size(A, 1)
-    nfft = size(tmp, 1)
-    nout = size(sXY, 1)
-    zerorg = n+1:nfft
-    ntapers = size(tapers, 2)
-    perform_fft! = plan_fft!(tmp, 1)
-
-    for i = 1:ntapers
-        for j = 1:div(length(A), n)
-            Aoff = (j-1)*n
-            for k = 1:n
-                tmp[k, j, 1] = A[Aoff+k].*tapers[k, i]
-                tmp[k, j, 2] = B[Aoff+k].*tapers[k, i]
-            end
-            tmp[zerorg, j, :] = zero(eltype(tmp))
-        end
-        
-        perform_fft!(tmp)
-        scalespectrum!(tmp, nfft, fs*ntapers, true)
-
-        for j = 1:div(length(sXY), nout)
-            outoff = (j-1)*nout
-            for k = 1:nout
-                outind = outoff+k
-                sXY[outind] += evaluate(accumulator, tmp[k, j, 1], tmp[k, j, 2])
-                sXX[outind] += abs2(tmp[k, j, 1])
-                sYY[outind] += abs2(tmp[k, j, 2])
-            end
-        end
-    end
-    (sXY, sXX, sYY)
-end
+# Estimate coherence
+coherence{T<:Real}(A::Vector{T}, B::Vector{T};
+                   tapers::Matrix=dpss(size(A, 1), 4),
+                   pad::Union(Bool, Int)=true, fs::Real=1.0) =
+    multitaper(hcat(A, B), (Coherence{T}(),); tapers=tapers, pad=pad, fs=fs)[1]
 
 #
 # Functionality for multiple channels
@@ -120,149 +209,6 @@ function allpairs(n)
         combs[k += 1] = (i, j)
     end
     combs
-end
-
-# Perform tapered FFT along first dimension
-function mtrfft{T<:Real,N}(A::AbstractArray{T,N}; tapers::Matrix=dpss(size(A, 1), 4),
-                           pad::Union(Bool, Int)=true, fs::Real=1.0)
-    nfft = getpadding(size(A, 1), pad)
-    n = size(A, 1)
-    sz = size(A)
-
-    X = Array(eltype(A), nfft, sz[2:end]..., size(tapers, 2))::Array{T,N+1}
-    Xstride = stride(X, N+1)
-    for i = 1:size(tapers, 2), j = 1:div(length(A), n)
-        Aoff = (j-1)*n
-        Xoff = (j-1)*nfft+Xstride*(i-1)
-        for k = 1:n
-            X[Xoff+k] = A[Aoff+k].*tapers[k, i]
-        end
-        X[Xoff+(n+1:nfft)] = zero(eltype(X))
-    end
-    
-    scalespectrum!(rfft(X, 1), nfft, fs*size(tapers, 2), true)
-end
-
-# Estimate power spectra
-# A is output of mtrfft (time x trials x channels x tapers)
-psd{T<:Real}(X::AbstractArray{Complex{T}, 4}) = squeeze(sqsum(X, 4), 4)::Array{T, 3}
-
-# Estimate cross-spectrum
-# A is output of mtrfft (time x trials x channels x tapers)
-function xspec{T<:Complex}(X::AbstractArray{T, 4}, pairs::AbstractVector{(Int, Int)},
-                           accumulator::BinaryFunctor=Dot(); trialavg::Bool=false)
-    xs = zeros(result_type(accumulator, eltype(X), eltype(X)), size(X, 1), trialavg ? 1 : size(X, 2), length(pairs))
-    if trialavg
-        for l = 1:size(X, 4), k = 1:length(pairs)
-            ch1, ch2 = pairs[k]
-            for j = 1:size(X, 2), i = 1:size(X, 1)
-                xs[i, 1, k] += evaluate(accumulator, X[i, j, ch1, l], X[i, j, ch2, l])
-            end
-        end
-    else
-        for l = 1:size(X, 4), k = 1:length(pairs)
-            ch1, ch2 = pairs[k]
-            for j = 1:size(X, 2), i = 1:size(X, 1)
-                xs[i, j, k] += evaluate(accumulator, X[i, j, ch1, l], X[i, j, ch2, l])
-            end
-        end
-    end
-    xs
-end
-
-#
-# Measures of synchrony
-#
-
-macro synchronyop(fn, accumulator, code)
-    # Only coherence uses the PSD
-    computepsd = fn == :coherence
-    esc(quote
-        function $fn{T<:Complex}(A::AbstractArray{T, 4}, pairs::AbstractVector{(Int, Int)};
-                                 trialavg::Bool=false)
-            n = trialavg ? size(A, 2)*size(A, 4) : size(A, 4)
-            xs = xspec(A, pairs, $(accumulator)(); trialavg=trialavg)
-            $(if computepsd
-                :(s = psd(A))
-            end)
-            for k = 1:length(pairs), j = 1:size(xs, 2), i = 1:size(xs, 1)
-                ch1, ch2 = pairs[k]
-                x = xs[i, j, k]
-                $(if computepsd
-                    :((sXX, sYY) = (s[i, j, ch1], s[i, j, ch2]))
-                end)
-                xs[i, j, k] = $code
-            end
-            xs
-        end
-
-        function $fn{T<:Real,N}(A::AbstractArray{T,N}, B::AbstractArray{T,N};
-                                tapers::Matrix=dpss(size(A, 1), 4),
-                                pad::Union(Bool, Int)=true, fs::Real=1.0)
-            n = size(tapers, 2)
-            sXYa, sXXa, sYYa = xspec(A, B, $(accumulator)(); tapers=tapers, pad=pad, fs=fs)
-            for i = 1:length(sXYa)
-                x = sXYa[i]
-                $(if computepsd
-                    :((sXX, sYY) = (sXXa[i], sYYa[i]))
-                end)
-                sXYa[i] = $code
-            end
-            sXYa
-        end
-    end)
-end
-
-abstract ConnectivityAccumulator <: BinaryFunctor
-result_type(::ConnectivityAccumulator, x, y) = promote_type(x, y)
-
-# Connectivity indices are defined in terms of two map functions. The first is a
-# NumericFunctor of type ConnectivityAccumulator. The second is a code fragment in
-# a macro.
-
-# Coherence
-type Dot <: ConnectivityAccumulator; end
-evaluate(::Dot, x, y) = dot(x, y)
-@synchronyop coherence Dot begin
-    x/sqrt(sXX*sYY)
-end
-
-# Phase locking value (imaginary) and pairwise phase consistence (unbiased PLV)
-type NormalizedDot <: BinaryFunctor; end
-function evaluate(::NormalizedDot, x, y)
-    z = dot(x, y)
-    z/abs(z)
-end
-@synchronyop plv NormalizedDot begin
-    x/n
-end
-@synchronyop ppc NormalizedDot begin
-    (dot(x, x) - n)/(n * (n - 1))
-end
-
-# PLI (signed) and unbiased PLI^2
-type ImDotSign <: BinaryFunctor; end
-function evaluate(::ImDotSign, x, y)
-    z = imag(dot(x, y))
-    z > 0 ? 1 : z < 0 ? -1 : 0
-end
-result_type(::ImDotSign, x, y) = Int
-@synchronyop pli ImDotSign begin
-    x/n
-end
-@synchronyop pli2_unbiased ImDotSign begin
-    (n * abs2(x/n) - 1)/(n - 1)
-end
-
-# Weighted PLI (signed)
-# This is a hack. We need to accumulate two reals, so we put them in a complex number
-type WPLIAccumulator <: BinaryFunctor; end
-function evaluate(::WPLIAccumulator, x, y)
-    z = imag(dot(x, y))
-    complex(z, abs(z))
-end
-@synchronyop wpli WPLIAccumulator begin
-    real(x)/imag(x)
 end
 
 #
