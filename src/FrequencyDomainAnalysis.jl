@@ -1,3 +1,22 @@
+# FrequencyDomainAnalysis.jl
+# Tools for spectral density estimation and analysis of phase relationships
+# between sets of signals.
+
+# Copyright (C) 2013   Simon Kornblith
+
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
+
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
 module Multitaper
 using NumericExtensions
 
@@ -140,6 +159,8 @@ end
 @accumulatebypair Union(PLV, PPC) A j i x y begin
     z = conj(x)*y
     A[j, i] += z/abs(z)
+    # Faster, but less precise
+    #A[j, i] += z*(1/sqrt(abs2(real(z))+abs2(imag(z))))
 end
 finish(s::PLV, nsamples) = scale!(abs(s.x), 1/nsamples)
 function finish{T}(s::PPC{T}, nsamples)
