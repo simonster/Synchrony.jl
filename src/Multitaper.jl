@@ -1,47 +1,58 @@
 module Multitaper
 using NumericExtensions
 
-export PowerSpectrum, CrossSpectrum, Coherence, dpss, multitaper, psd, xspec, coherence, allpairs, frequencies
+export PowerSpectrum, CrossSpectrum, Coherence, Coherency, PLV, PPC, PLI, PLI2Unbiased, WPLI,
+       WPLI2Debiased, dpss, multitaper, psd, xspec, coherence, allpairs, frequencies
 
 #
 # Statistics computed on transformed data
 #
 abstract TransformStatistic{T<:Real}
-
-# Convenience functions for pairwise statistics
 abstract PairwiseTransformStatistic{T<:Real} <: TransformStatistic{T}
+
+# Generate a new PairwiseTransformStatistic, including constructors
 macro pairwisestat(name, xtype)
     esc(quote
         type $name{T<:Real} <: PairwiseTransformStatistic{T}
-            pairs::Vector{(Int, Int)}
-            x::Array{$xtype, 2}
+            pairs::Array{Int, 2}
+            x::$xtype
             $name() = new()
-            $name(pairs::Vector{(Int, Int)}) = new(pairs)
+            $name(pairs::Array{Int, 2}) = new(pairs)
         end
         $name() = $name{Float64}()
     end)
 end
+
+# Most PairwiseTransformStatistics will initialize their fields the same way
 function init{T}(s::PairwiseTransformStatistic{T}, nout, nchannels, nsamples)
     if !isdefined(s, :pairs); s.pairs = allpairs(nchannels); end
-    s.x = zeros(eltype(fieldtype(s, :x)), nout, length(s.pairs))
+    s.x = zeros(eltype(fieldtype(s, :x)), nout, size(s.pairs, 2))
 end
-macro accumulatebypair(t, j, i, x, y, code)
+
+# Create accumulate function that loops over pairs of channels, performing some transform for each
+macro accumulatebypair(stat, arr, freqindex, pairindex, ch1ft, ch2ft, code)
     quote
-        function $(esc(:accumulate))(s::$t, fftout)
+        function $(esc(:accumulate))(s::$stat, fftout)
+            $arr = s.x
             pairs = s.pairs
-            for $i = 1:length(pairs)
-                ch1, ch2 = pairs[$i]
-                for $j = 1:size(fftout, 1)
-                    $x = fftout[$j, ch1]
-                    $y = fftout[$j, ch2]
-                    $code
+            @inbounds begin
+                for $pairindex = 1:size(pairs, 2)
+                    ch1 = pairs[1, $pairindex]
+                    ch2 = pairs[2, $pairindex]
+                    for $freqindex = 1:size(fftout, 1)
+                        $ch1ft = fftout[$freqindex, ch1]
+                        $ch2ft = fftout[$freqindex, ch2]
+                        $code
+                    end
                 end
             end
         end
     end
 end
 
-# Power Spectrum
+#
+# Power spectrum
+#
 type PowerSpectrum{T<:Real} <: TransformStatistic{T}
     x::Array{T, 2}
     PowerSpectrum() = new()
@@ -53,49 +64,164 @@ end
 function accumulate(s::PowerSpectrum, fftout)
     A = s.x
     for i = 1:length(fftout)
-        A[i] += abs2(fftout[i])
+        @inbounds A[i] += abs2(fftout[i])
     end
 end
 finish(s::PowerSpectrum, nsamples) = scale!(s.x, 1/nsamples)
 
-# Cross Spectrum
-@pairwisestat CrossSpectrum Complex{T}
-@accumulatebypair CrossSpectrum j i x y begin
-    s.x[j, i] += conj(x)*y
+#
+# Cross spectrum
+#
+@pairwisestat CrossSpectrum Matrix{Complex{T}}
+@accumulatebypair CrossSpectrum A j i x y begin
+    A[j, i] += conj(x)*y
 end
 finish(s::CrossSpectrum, nsamples) = scale!(s.x, 1/nsamples)
 
-# Coherence
-type Coherence{T<:Real} <: PairwiseTransformStatistic{T}
-    pairs::Vector{(Int, Int)}
-    psd::PowerSpectrum{T}
-    xspec::CrossSpectrum{T}
-    Coherence() = new()
-    Coherence(pairs::Vector{(Int, Int)}) = new(pairs)
+#
+# Coherency and coherence
+#
+for sym in (:Coherency, :Coherence)
+    @eval begin
+        type $sym{T<:Real} <: PairwiseTransformStatistic{T}
+            pairs::Array{Int, 2}
+            psd::PowerSpectrum{T}
+            xspec::CrossSpectrum{T}
+            $sym() = new()
+            $sym(pairs::Array{Int, 2}) = new(pairs)
+        end
+        $sym() = $sym{Float64}()
+    end
 end
-Coherence() = Coherence{Float64}()
-function init{T}(s::Coherence{T}, nout, nchannels, nsamples)
+function init{T}(s::Union(Coherency{T}, Coherence{T}), nout, nchannels, nsamples)
     if !isdefined(s, :pairs); s.pairs = allpairs(nchannels); end
     s.psd = PowerSpectrum{T}()
     s.xspec = CrossSpectrum{T}(s.pairs)
     init(s.psd, nout, nchannels, nsamples)
     init(s.xspec, nout, nchannels, nsamples)
 end
-function accumulate(s::Coherence, fftout)
+function accumulate(s::Union(Coherency, Coherence), fftout)
     accumulate(s.psd, fftout)
     accumulate(s.xspec, fftout)
 end
-function finish(s::Coherence, nsamples)
+function finish(s::Coherency, nsamples)
     psd = finish(s.psd, nsamples)
     xspec = finish(s.xspec, nsamples)
     pairs = s.pairs
-    for i = 1:length(pairs)
-        ch1, ch2 = pairs[i]
+    for i = 1:size(pairs, 2)
+        ch1 = pairs[1, i]
+        ch2 = pairs[2, i]
         for j = 1:size(xspec, 1)
             xspec[j, i] = xspec[j, i]/sqrt(psd[j, ch1]*psd[j, ch2])
         end
     end
     xspec
+end
+function finish{T}(s::Coherence{T}, nsamples)
+    psd = finish(s.psd, nsamples)
+    xspec = finish(s.xspec, nsamples)
+    out = zeros(T, size(xspec, 1), size(xspec, 2))
+    pairs = s.pairs
+    for i = 1:size(pairs, 2)
+        ch1 = pairs[1, i]
+        ch2 = pairs[2, i]
+        for j = 1:size(xspec, 1)
+            out[j, i] = abs(xspec[j, i])/sqrt(psd[j, ch1]*psd[j, ch2])
+        end
+    end
+    out
+end
+
+#
+# Phase locking value and pairwise phase consistency
+#
+@pairwisestat PLV Matrix{Complex{T}}
+@pairwisestat PPC Matrix{Complex{T}}
+@accumulatebypair Union(PLV, PPC) A j i x y begin
+    z = conj(x)*y
+    A[j, i] += z/abs(z)
+end
+finish(s::PLV, nsamples) = scale!(abs(s.x), 1/nsamples)
+function finish{T}(s::PPC{T}, nsamples)
+    out = zeros(T, size(s.x, 1), size(s.x, 2))
+    for i = 1:length(out)
+        out[i] = (abs2(s.x[i])-nsamples)/(nsamples*(nsamples-1))
+    end
+    out
+end
+
+#
+# Phase lag index and unbiased PLI^2
+#
+@pairwisestat PLI Matrix{Int}
+@pairwisestat PLI2Unbiased Matrix{Int}
+@accumulatebypair Union(PLI, PLI2Unbiased) A j i x y begin
+    z = imag(conj(x)*y)
+    if z != 0
+        A[j, i] += 2*(z > 0)-1
+    end
+end
+function finish{T}(s::PLI{T}, nsamples)
+    out = zeros(T, size(s.x, 1), size(s.x, 2))
+    for i = 1:length(out)
+        out[i] = abs(s.x[i])/nsamples
+    end
+    out
+end
+function finish{T}(s::PLI2Unbiased{T}, nsamples)
+    out = zeros(T, size(s.x, 1), size(s.x, 2))
+    for i = 1:length(out)
+        out[i] = (nsamples * abs2(s.x[i]/nsamples) - 1)/(nsamples - 1)
+    end
+    out
+end
+
+#
+# Weighted phase lag index
+#
+@pairwisestat WPLI Array{T,3}
+# We need 2 fields per freq/channel in s.x
+function init{T}(s::WPLI{T}, nout, nchannels, nsamples)
+    if !isdefined(s, :pairs); s.pairs = allpairs(nchannels); end
+    s.x = zeros(eltype(fieldtype(s, :x)), 2, nout, size(s.pairs, 2))
+end
+@accumulatebypair WPLI A j i x y begin
+    z = imag(conj(x)*y)
+    A[1, j, i] += z
+    A[2, j, i] += abs(z)
+end
+function finish{T}(s::WPLI{T}, nsamples)
+    out = zeros(T, size(s.x, 2), size(s.x, 3))
+    for i = 1:size(out, 2), j = 1:size(out, 1)
+        out[j, i] = abs(s.x[1, j, i])/s.x[2, j, i]
+    end
+    out
+end
+
+#
+# Debiased (i.e. still somewhat biased) WPLI^2
+#
+@pairwisestat WPLI2Debiased Array{T,3}
+# We need 3 fields per freq/channel in s.x
+function init{T}(s::WPLI2Debiased{T}, nout, nchannels, nsamples)
+    if !isdefined(s, :pairs); s.pairs = allpairs(nchannels); end
+    s.x = zeros(eltype(fieldtype(s, :x)), 3, nout, size(s.pairs, 2))
+end
+@accumulatebypair WPLI2Debiased A j i x y begin
+    z = imag(conj(x)*y)
+    A[1, j, i] += z
+    A[2, j, i] += abs(z)
+    A[3, j, i] += abs2(z)
+end
+function finish{T}(s::WPLI2Debiased{T}, nsamples)
+    out = zeros(T, size(s.x, 2), size(s.x, 3))
+    for i = 1:size(out, 2), j = 1:size(out, 1)
+        imcsd = s.x[1, j, i]
+        absimcsd = s.x[2, j, i]
+        sqimcsd = s.x[3, j, i]
+        out[j, i] = (abs2(imcsd) - sqimcsd)/(abs2(imcsd) - sqimcsd)
+    end
+    out
 end
 
 #
@@ -161,7 +287,7 @@ function multitaper{T<:Real}(A::Union(AbstractVector{T}, AbstractMatrix{T}, Abst
     scalelast = iseven(nfft) && frange[end] == length(allfreq)
 
     for i = 1:ntapers, j = 1:size(A, 3)
-        for k = 1:nchannels
+        @inbounds for k = 1:nchannels
             for l = 1:n
                 fftin[l, k] = A[l, k, j].*tapers[l, i]
             end
@@ -174,7 +300,7 @@ function multitaper{T<:Real}(A::Union(AbstractVector{T}, AbstractMatrix{T}, Abst
         FFTW.execute(T, p.plan)
 
         # Scale output to conform to Parseval's theorem
-        for k = 1:nchannels
+        @inbounds for k = 1:nchannels
             for l = 1:length(frange)
                 fftview[l, k] = fftout[frange[l], k]*multiplier
             end
@@ -223,12 +349,14 @@ coherence{T<:Real}(A::Vector{T}, B::Vector{T}; kw...) =
 #
 # Get all pairs of channels
 function allpairs(n)
-    combs = Array((Int, Int), binomial(n, 2))
+    pairs = Array(Int, 2, binomial(n, 2))
     k = 0
     for i = 1:n-1, j = i+1:n
-        combs[k += 1] = (i, j)
+        k += 1
+        pairs[1, k] = i
+        pairs[2, k] = j
     end
-    combs
+    pairs
 end
 
 #

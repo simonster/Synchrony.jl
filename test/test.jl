@@ -30,14 +30,13 @@ sXY2 = xspec(input[2], input[1]; fs=1000)
 @assert sXY1 == conj(sXY2)
 c = coherence(input[1], input[2], fs=1000)
 truth = readdlm("coherence_mag.txt", '\t')
-@assert max(abs(abs(c) - truth)) < sqrt(eps())
-truth = readdlm("coherence_phi.txt", '\t')[2:end-1]
-@assert max(abs(angle(c[2:end-1]) - truth)) < sqrt(eps())
+@assert max(abs(c - truth)) < sqrt(eps())
 
 # Test multiple channel functionality
 in3 = hcat(input[1], input[2])
-(xs, s, c2) = multitaper(in3, (CrossSpectrum(), PowerSpectrum(), Coherence()), fs=1000)
+(xs, s, c2) = multitaper(in3, (CrossSpectrum(), PowerSpectrum(), Coherency()), fs=1000)
 @assert max(abs(s - out1)) < 7*eps()
 @assert max(abs(xs - sXY1)) < 7*eps()
-@assert max(abs(real(c2[:]) - real(c[:, 1]))) < sqrt(eps())
-@assert max(abs(imag(c2[:]) - imag(c[:, 1]))) < sqrt(eps())
+truth = readdlm("coherence_phi.txt", '\t')[2:end-1]
+@assert max(abs(c2) - c) <= eps()
+@assert max(abs(angle(c2[2:end-1]) - truth)) < sqrt(eps())
