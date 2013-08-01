@@ -1,4 +1,4 @@
-using Multitaper
+using FrequencyDomainAnalysis
 
 # Test dpss against dpss computed with MATLAB
 d1 = dpss(128, 4)

@@ -43,7 +43,7 @@ macro pairwisestat(name, xtype)
 end
 
 # Most PairwiseTransformStatistics will initialize their fields the same way
-function init{T}(s::PairwiseTransformStatistic{T}, nout, nchannels, nsamples)
+function init{T}(s::PairwiseTransformStatistic{T}, nout, nchannels, nepochs)
     if !isdefined(s, :pairs); s.pairs = allpairs(nchannels); end
     s.x = zeros(eltype(fieldtype(s, :x)), nout, size(s.pairs, 2))
 end
@@ -77,7 +77,7 @@ type PowerSpectrum{T<:Real} <: TransformStatistic{T}
     PowerSpectrum() = new()
 end
 PowerSpectrum() = PowerSpectrum{Float64}()
-function init{T}(s::PowerSpectrum{T}, nout, nchannels, nsamples)
+function init{T}(s::PowerSpectrum{T}, nout, nchannels, nepochs)
     s.x = zeros(T, nout, nchannels)
 end
 function accumulate(s::PowerSpectrum, fftout)
@@ -86,7 +86,7 @@ function accumulate(s::PowerSpectrum, fftout)
         @inbounds A[i] += abs2(fftout[i])
     end
 end
-finish(s::PowerSpectrum, nsamples) = scale!(s.x, 1/nsamples)
+finish(s::PowerSpectrum, nepochs) = scale!(s.x, 1/nepochs)
 
 #
 # Cross spectrum
@@ -95,7 +95,7 @@ finish(s::PowerSpectrum, nsamples) = scale!(s.x, 1/nsamples)
 @accumulatebypair CrossSpectrum A j i x y begin
     A[j, i] += conj(x)*y
 end
-finish(s::CrossSpectrum, nsamples) = scale!(s.x, 1/nsamples)
+finish(s::CrossSpectrum, nepochs) = scale!(s.x, 1/nepochs)
 
 #
 # Coherency and coherence
@@ -112,20 +112,20 @@ for sym in (:Coherency, :Coherence)
         $sym() = $sym{Float64}()
     end
 end
-function init{T}(s::Union(Coherency{T}, Coherence{T}), nout, nchannels, nsamples)
+function init{T}(s::Union(Coherency{T}, Coherence{T}), nout, nchannels, nepochs)
     if !isdefined(s, :pairs); s.pairs = allpairs(nchannels); end
     s.psd = PowerSpectrum{T}()
     s.xspec = CrossSpectrum{T}(s.pairs)
-    init(s.psd, nout, nchannels, nsamples)
-    init(s.xspec, nout, nchannels, nsamples)
+    init(s.psd, nout, nchannels, nepochs)
+    init(s.xspec, nout, nchannels, nepochs)
 end
 function accumulate(s::Union(Coherency, Coherence), fftout)
     accumulate(s.psd, fftout)
     accumulate(s.xspec, fftout)
 end
-function finish(s::Coherency, nsamples)
-    psd = finish(s.psd, nsamples)
-    xspec = finish(s.xspec, nsamples)
+function finish(s::Coherency, nepochs)
+    psd = finish(s.psd, nepochs)
+    xspec = finish(s.xspec, nepochs)
     pairs = s.pairs
     for i = 1:size(pairs, 2)
         ch1 = pairs[1, i]
@@ -136,9 +136,9 @@ function finish(s::Coherency, nsamples)
     end
     xspec
 end
-function finish{T}(s::Coherence{T}, nsamples)
-    psd = finish(s.psd, nsamples)
-    xspec = finish(s.xspec, nsamples)
+function finish{T}(s::Coherence{T}, nepochs)
+    psd = finish(s.psd, nepochs)
+    xspec = finish(s.xspec, nepochs)
     out = zeros(T, size(xspec, 1), size(xspec, 2))
     pairs = s.pairs
     for i = 1:size(pairs, 2)
@@ -154,19 +154,30 @@ end
 #
 # Phase locking value and pairwise phase consistency
 #
+# For PLV, see Lachaux, J.-P., Rodriguez, E., Martinerie, J., & Varela, F. J.
+# (1999). Measuring phase synchrony in brain signals. Human Brain Mapping,
+# 8(4), 194–208. doi:10.1002/(SICI)1097-0193(1999)8:4<194::AID-HBM4>3.0.CO;2-C
+#
+# For PPC, see Vinck, M., van Wingerden, M., Womelsdorf, T., Fries, P., &
+# Pennartz, C. M. A. (2010). The pairwise phase consistency: A bias-free
+# measure of rhythmic neuronal synchronization. NeuroImage, 51(1), 112–122.
+# doi:10.1016/j.neuroimage.2010.01.073
 @pairwisestat PLV Matrix{Complex{T}}
 @pairwisestat PPC Matrix{Complex{T}}
 @accumulatebypair Union(PLV, PPC) A j i x y begin
+    # Add phase difference between pair as a unit vector
     z = conj(x)*y
     A[j, i] += z/abs(z)
     # Faster, but less precise
     #A[j, i] += z*(1/sqrt(abs2(real(z))+abs2(imag(z))))
 end
-finish(s::PLV, nsamples) = scale!(abs(s.x), 1/nsamples)
-function finish{T}(s::PPC{T}, nsamples)
+finish(s::PLV, nepochs) = scale!(abs(s.x), 1/nepochs)
+function finish{T}(s::PPC{T}, nepochs)
     out = zeros(T, size(s.x, 1), size(s.x, 2))
     for i = 1:length(out)
-        out[i] = (abs2(s.x[i])-nsamples)/(nsamples*(nsamples-1))
+        # This is equivalent to the formulation in Vinck et al. (2010), since
+        # 2*sum(unique pairs) = sum(trials)^2-n. 
+        out[i] = (abs2(s.x[i])-nepochs)/(nepochs*(nepochs-1))
     end
     out
 end
@@ -174,6 +185,16 @@ end
 #
 # Phase lag index and unbiased PLI^2
 #
+# For PLI, see Stam, C. J., Nolte, G., & Daffertshofer, A. (2007). Phase lag
+# index: Assessment of functional connectivity from multi channel EEG and MEG
+# with diminished bias from common sources. Human Brain Mapping, 28(11),
+# 1178–1193. doi:10.1002/hbm.20346
+#
+# For unbiased PLI^2, see Vinck, M., Oostenveld, R., van Wingerden, M.,
+# Battaglia, F., & Pennartz, C. M. A. (2011). An improved index of
+# phase-synchronization for electrophysiological data in the presence of
+# volume-conduction, noise and sample-size bias. NeuroImage, 55(4), 1548–1565.
+# doi:10.1016/j.neuroimage.2011.01.055
 @pairwisestat PLI Matrix{Int}
 @pairwisestat PLI2Unbiased Matrix{Int}
 @accumulatebypair Union(PLI, PLI2Unbiased) A j i x y begin
@@ -182,17 +203,17 @@ end
         A[j, i] += 2*(z > 0)-1
     end
 end
-function finish{T}(s::PLI{T}, nsamples)
+function finish{T}(s::PLI{T}, nepochs)
     out = zeros(T, size(s.x, 1), size(s.x, 2))
     for i = 1:length(out)
-        out[i] = abs(s.x[i])/nsamples
+        out[i] = abs(s.x[i])/nepochs
     end
     out
 end
-function finish{T}(s::PLI2Unbiased{T}, nsamples)
+function finish{T}(s::PLI2Unbiased{T}, nepochs)
     out = zeros(T, size(s.x, 1), size(s.x, 2))
     for i = 1:length(out)
-        out[i] = (nsamples * abs2(s.x[i]/nsamples) - 1)/(nsamples - 1)
+        out[i] = (nepochs * abs2(s.x[i]/nepochs) - 1)/(nepochs - 1)
     end
     out
 end
@@ -200,9 +221,10 @@ end
 #
 # Weighted phase lag index
 #
+# See Vinck et al. (2011) as above.
 @pairwisestat WPLI Array{T,3}
 # We need 2 fields per freq/channel in s.x
-function init{T}(s::WPLI{T}, nout, nchannels, nsamples)
+function init{T}(s::WPLI{T}, nout, nchannels, nepochs)
     if !isdefined(s, :pairs); s.pairs = allpairs(nchannels); end
     s.x = zeros(eltype(fieldtype(s, :x)), 2, nout, size(s.pairs, 2))
 end
@@ -211,7 +233,7 @@ end
     A[1, j, i] += z
     A[2, j, i] += abs(z)
 end
-function finish{T}(s::WPLI{T}, nsamples)
+function finish{T}(s::WPLI{T}, nepochs)
     out = zeros(T, size(s.x, 2), size(s.x, 3))
     for i = 1:size(out, 2), j = 1:size(out, 1)
         out[j, i] = abs(s.x[1, j, i])/s.x[2, j, i]
@@ -222,9 +244,10 @@ end
 #
 # Debiased (i.e. still somewhat biased) WPLI^2
 #
+# See Vinck et al. (2011) as above.
 @pairwisestat WPLI2Debiased Array{T,3}
 # We need 3 fields per freq/channel in s.x
-function init{T}(s::WPLI2Debiased{T}, nout, nchannels, nsamples)
+function init{T}(s::WPLI2Debiased{T}, nout, nchannels, nepochs)
     if !isdefined(s, :pairs); s.pairs = allpairs(nchannels); end
     s.x = zeros(eltype(fieldtype(s, :x)), 3, nout, size(s.pairs, 2))
 end
@@ -234,7 +257,7 @@ end
     A[2, j, i] += abs(z)
     A[3, j, i] += abs2(z)
 end
-function finish{T}(s::WPLI2Debiased{T}, nsamples)
+function finish{T}(s::WPLI2Debiased{T}, nepochs)
     out = zeros(T, size(s.x, 2), size(s.x, 3))
     for i = 1:size(out, 2), j = 1:size(out, 1)
         imcsd = s.x[1, j, i]
@@ -292,11 +315,11 @@ function multitaper{T<:Real}(A::Union(AbstractVector{T}, AbstractMatrix{T}, Abst
     zerorg = n+1:nfft
     ntapers = size(tapers, 2)
     nchannels = size(A, 2)
-    nsamples = size(A, 3)*ntapers
+    nepochs = size(A, 3)*ntapers
     multiplier = sqrt(2/fs)
 
     for stat in stats
-        init(stat, length(frange), nchannels, nsamples)
+        init(stat, length(frange), nchannels, nepochs)
     end
 
     fftin = Array(T, nfft, size(A, 2))
@@ -339,7 +362,7 @@ function multitaper{T<:Real}(A::Union(AbstractVector{T}, AbstractMatrix{T}, Abst
         end
     end
 
-    [finish(stat, nsamples) for stat in stats]
+    [finish(stat, nepochs) for stat in stats]
 end
 
 # Calling with types instead of instances
