@@ -490,9 +490,9 @@ function copyscalefft!(fftview, fftout, frange, multiplier, nfft)
 
         # Correct edges of FFT so that all power is in the same units
         # This is necessary because the FFT divides power associated
-        # with real signals between real and imaginary frequencies,
+        # with real signals between positive and negative frequencies,
         # except for power at 0 and FMAX. We don't compute the
-        # imaginary frequencies, but we do need to scale the FFT so
+        # negative frequencies, but we do need to scale the FFT so
         # that the power is correct.
         if frange[1] == 1
             fftview[1, k] *= divisor
