@@ -21,13 +21,14 @@ module FrequencyDomainAnalysis
 using NumericExtensions
 
 export PowerSpectrum, CrossSpectrum, Coherence, Coherency, PLV, PPC, PLI, PLI2Unbiased, WPLI,
-       WPLI2Debiased, dpss, multitaper, psd, xspec, coherence, allpairs, frequencies
+       WPLI2Debiased, dpss, multitaper, psd, xspec, coherence, spikefieldcoherence,
+       allpairs, frequencies
 
 #
 # Statistics computed on transformed data
 #
-abstract TransformStatistic{T<:Real}
-abstract PairwiseTransformStatistic{T<:Real} <: TransformStatistic{T}
+abstract ContinuousTransformStatistic{T<:Real}
+abstract PairwiseTransformStatistic{T<:Real} <: ContinuousTransformStatistic{T}
 
 # Generate a new PairwiseTransformStatistic, including constructors
 macro pairwisestat(name, xtype)
@@ -72,7 +73,7 @@ end
 #
 # Power spectrum
 #
-type PowerSpectrum{T<:Real} <: TransformStatistic{T}
+type PowerSpectrum{T<:Real} <: ContinuousTransformStatistic{T}
     x::Array{T, 2}
     PowerSpectrum() = new()
 end
@@ -154,14 +155,15 @@ end
 #
 # Phase locking value and pairwise phase consistency
 #
-# For PLV, see Lachaux, J.-P., Rodriguez, E., Martinerie, J., & Varela, F. J.
-# (1999). Measuring phase synchrony in brain signals. Human Brain Mapping,
-# 8(4), 194–208. doi:10.1002/(SICI)1097-0193(1999)8:4<194::AID-HBM4>3.0.CO;2-C
+# For PLV, see Lachaux, J.-P., Rodriguez, E., Martinerie, J., & Varela,
+# F. J. (1999). Measuring phase synchrony in brain signals. Human Brain
+# Mapping, 8(4), 194–208.
+# doi:10.1002/(SICI)1097-0193(1999)8:4<194::AID-HBM4>3.0.CO;2-C
 #
-# For PPC, see Vinck, M., van Wingerden, M., Womelsdorf, T., Fries, P., &
-# Pennartz, C. M. A. (2010). The pairwise phase consistency: A bias-free
-# measure of rhythmic neuronal synchronization. NeuroImage, 51(1), 112–122.
-# doi:10.1016/j.neuroimage.2010.01.073
+# For PPC, see Vinck, M., van Wingerden, M., Womelsdorf, T., Fries, P.,
+# & Pennartz, C. M. A. (2010). The pairwise phase consistency: A
+# bias-free measure of rhythmic neuronal synchronization. NeuroImage,
+# 51(1), 112–122. doi:10.1016/j.neuroimage.2010.01.073
 @pairwisestat PLV Matrix{Complex{T}}
 @pairwisestat PPC Matrix{Complex{T}}
 @accumulatebypair Union(PLV, PPC) A j i x y begin
@@ -185,16 +187,16 @@ end
 #
 # Phase lag index and unbiased PLI^2
 #
-# For PLI, see Stam, C. J., Nolte, G., & Daffertshofer, A. (2007). Phase lag
-# index: Assessment of functional connectivity from multi channel EEG and MEG
-# with diminished bias from common sources. Human Brain Mapping, 28(11),
-# 1178–1193. doi:10.1002/hbm.20346
+# For PLI, see Stam, C. J., Nolte, G., & Daffertshofer, A. (2007).
+# Phase lag index: Assessment of functional connectivity from multi
+# channel EEG and MEG with diminished bias from common sources.
+# Human Brain Mapping, 28(11), 1178–1193. doi:10.1002/hbm.20346
 #
-# For unbiased PLI^2, see Vinck, M., Oostenveld, R., van Wingerden, M.,
-# Battaglia, F., & Pennartz, C. M. A. (2011). An improved index of
-# phase-synchronization for electrophysiological data in the presence of
-# volume-conduction, noise and sample-size bias. NeuroImage, 55(4), 1548–1565.
-# doi:10.1016/j.neuroimage.2011.01.055
+# For unbiased PLI^2, see Vinck, M., Oostenveld, R., van
+# Wingerden, M., Battaglia, F., & Pennartz, C. M. A. (2011). An
+# improved index of phase-synchronization for electrophysiological data
+# in the presence of volume-conduction, noise and sample-size bias.
+# NeuroImage, 55(4), 1548–1565. doi:10.1016/j.neuroimage.2011.01.055
 @pairwisestat PLI Matrix{Int}
 @pairwisestat PLI2Unbiased Matrix{Int}
 @accumulatebypair Union(PLI, PLI2Unbiased) A j i x y begin
@@ -271,12 +273,14 @@ end
 #
 # Core functionality
 #
+
 # Compute discrete prolate spheroid sequences (Slepian tapers)
+#
+# See Gruenbacher, D. M., & Hummels, D. R. (1994). A simple algorithm
+# for generating discrete prolate spheroidal sequences. IEEE
+# Transactions on Signal Processing, 42(11), 3276-3278.
 function dpss(n::Int, nw::Real, ntapers::Int=iceil(2*nw)-1)
     # Construct symmetric tridiagonal matrix
-    # See Gruenbacher, D. M., & Hummels, D. R. (1994). A simple algorithm
-    # for generating discrete prolate spheroidal sequences. IEEE
-    # Transactions on Signal Processing, 42(11), 3276-3278.
     i1 = 0:(n-1)
     i2 = 1:(n-1)
     mat = SymTridiagonal(cos(2pi*nw/n)*((n - 1)/2 - i1).^2, 0.5.*(i2*n - i2.^2))
@@ -291,72 +295,58 @@ function dpss(n::Int, nw::Real, ntapers::Int=iceil(2*nw)-1)
     scale!(v, sgn)
 end
 
-# Compute frequencies based on length of input
-frequencies(nfft::Int, fs::Real=1.0) = (0:div(nfft, 2))*(fs/nfft)
-function frequencies(nfft::Int, fs::Real, fmin::Real, fmax::Real=Inf)
-    allfreq = frequencies(nfft, fs)
-    allfreq[searchsortedfirst(allfreq, fmin):(fmax == Inf ? length(allfreq) : searchsortedlast(allfreq, fmax))]
+# Compute frequencies based on length of padded FFT
+function frequencies(nfft::Int, fs::Real=1.0)
+    freq = (0:div(nfft, 2))*(fs/nfft)
+    (freq, 1:length(freq))
 end
+
+# Compute frequencies based on length of padded FFT, with limits
+function frequencies(nfft::Int, fs::Real, fmin::Real, fmax::Real=Inf)
+    freq = frequencies(nfft, fs)
+    freqrange = searchsortedfirst(allfreq, fmin):(fmax == Inf ? length(allfreq) : searchsortedlast(allfreq, fmax))
+    (freq[freqrange], freqrange)
+end
+
+# Compute frequencies based on data length, assuming padding to next power of 2
 frequencies{T<:Real}(A::Union(AbstractVector{T}, AbstractMatrix{T}, AbstractArray{T,3}),
                      fs::Real=1.0, fmin::Real=0.0, fmax::Real=Inf) =
     frequencies(nextpow2(size(A, 1)), fs, fmin, fmax)
 
-# Perform tapered FFT along first dimension for each channel along second dimension,
-# accumulating along third dimension
+# Perform tapered FFT of continuous signals
+# A is samples x channels x trials
 function multitaper{T<:Real}(A::Union(AbstractVector{T}, AbstractMatrix{T}, AbstractArray{T,3}),
-                             stats::(TransformStatistic, TransformStatistic...);
+                             stats::(ContinuousTransformStatistic, ContinuousTransformStatistic...);
                              tapers::Matrix=dpss(size(A, 1), 4), nfft::Int=nextpow2(size(A, 1)),
-                             fs::Real=1.0, fmin::Real=0.0, fmax::Real=Inf)
-    allfreq = frequencies(nfft, fs)
-    frange = searchsortedfirst(allfreq, fmin):(fmax == Inf ? length(allfreq) : searchsortedlast(allfreq, fmax))
-
+                             fs::Real=1.0, freqrange::Range1{Int}=1:(nfft >> 1 + 1),
+                             fftwflags::Uint32=FFTW.ESTIMATE)
     n = size(A, 1)
     nout = nfft >> 1 + 1
-    zerorg = n+1:nfft
     ntapers = size(tapers, 2)
     nchannels = size(A, 2)
     nepochs = size(A, 3)*ntapers
     multiplier = sqrt(2/fs)
 
     for stat in stats
-        init(stat, length(frange), nchannels, nepochs)
+        init(stat, length(freqrange), nchannels, nepochs)
     end
 
-    fftin = Array(T, nfft, size(A, 2))
-    fftout = Array(Complex{T}, nout, size(A, 2))
-    #fftview = sub(fftout, frange, 1:size(A,2))
-    fftview = zeros(Complex{T}, length(frange), size(A, 2))
+    dtype = outputtype(T)
+    fftin = zeros(dtype, nfft, size(A, 2))
+    fftout = Array(Complex{dtype}, nout, size(A, 2))
+    #fftview = sub(fftout, freqrange, 1:size(A,2))
+    fftview = zeros(Complex{dtype}, length(freqrange), size(A, 2))
 
-    p = FFTW.Plan(fftin, fftout, 1, FFTW.ESTIMATE, FFTW.NO_TIMELIMIT)
-    scalelast = iseven(nfft) && frange[end] == length(allfreq)
+    p = FFTW.Plan(fftin, fftout, 1, fftwflags, FFTW.NO_TIMELIMIT)
 
     for i = 1:ntapers, j = 1:size(A, 3)
-        @inbounds for k = 1:nchannels
-            for l = 1:n
-                fftin[l, k] = A[l, k, j].*tapers[l, i]
-            end
-            for l = n+1:nfft
-                fftin[l, k] = zero(T)
-            end
+        @inbounds for k = 1:nchannels, l = 1:n
+            fftin[l, k] = A[l, k, j]*tapers[l, i]
         end
 
-        # Exectute rfft with output preallocated
-        FFTW.execute(T, p.plan)
+        FFTW.execute(dtype, p.plan)
+        copyscalefft!(fftview, fftout, freqrange, multiplier, nfft)
 
-        # Scale output to conform to Parseval's theorem
-        @inbounds for k = 1:nchannels
-            for l = 1:length(frange)
-                fftview[l, k] = fftout[frange[l], k]*multiplier
-            end
-            if frange[1] == 1
-                fftview[1, k] /= sqrt(2)
-            end
-            if scalelast
-                fftview[end, k] /= sqrt(2)
-            end
-        end
-
-        # Accumulate
         for stat in stats
             accumulate(stat, fftview)
         end
@@ -367,20 +357,104 @@ end
 
 # Calling with types instead of instances
 multitaper{T<:Real}(A::Union(AbstractVector{T}, AbstractMatrix{T}, AbstractArray{T,3}),
-                    stat::(DataType, DataType...); tapers::Matrix=dpss(size(A, 1), 4),
-                    nfft::Int=nextpow2(size(A, 1)), fs::Real=1.0, fmin::Real=0.0, fmax::Real=Inf) =
-    multitaper(A, tuple([x() for x in stat]...); tapers=tapers, nfft=nfft, fs=fs, fmin=fmin, fmax=fmax)
+                    stat::(DataType, DataType...); kw...) =
+    multitaper(A, tuple([x{outputtype(T)}() for x in stat]...); kw...)
 
 # Calling with a single type or instance
-multitaper{T<:Real,S<:TransformStatistic}(A::Union(AbstractVector{T}, AbstractMatrix{T}, AbstractArray{T,3}),
-                                          stat::Union(S, Type{S}); tapers::Matrix=dpss(size(A, 1), 4),
-                                          nfft::Int=nextpow2(size(A, 1)), fs::Real=1.0, fmin::Real=0.0, fmax::Real=Inf) =
-    multitaper(A, (stat,); tapers=tapers, nfft=nfft, fs=fs, fmin=fmin, fmax=fmax)[1]
+multitaper{T<:Real,S<:ContinuousTransformStatistic}(A::Union(AbstractVector{T}, AbstractMatrix{T}, AbstractArray{T,3}),
+                                                    stat::Union(S, Type{S}); kw...) = multitaper(A, (stat,); kw...)[1]
+
+#
+# Spike-field coherence
+#
+# See Fries, P., Roelfsema, P. R., Engel, A. K., König, P., & Singer,
+# W. (1997). Synchronization of oscillatory responses in visual cortex
+# correlates with perception in interocular rivalry. Proceedings of the
+# National Academy of Sciences, 94(23), 12699–12704.
+#
+# For bias correction, see Grasse, D. W., & Moxon, K. A. (2010).
+# Correcting the bias of spike field coherence estimators due to a
+# finite number of spikes. Journal of Neurophysiology, 104(1), 548–558.
+# doi:10.1152/jn.00610.2009
+#
+# This is not (quite) the same thing as the spike-train to field
+# coherence measure in Jarvis & Mitra, 2001!
+function spikefieldcoherence{T<:Integer,S<:Real}(points::AbstractVector{T}, field::AbstractVector{S},
+                                                 window::Range1{Int};
+                                                 nfft::Int=nextpow2(length(window)),
+                                                 fs::Real=1.0, freqrange::Range1{Int}=1:(nfft >> 1 + 1),
+                                                 tapers::Matrix=dpss(length(window), length(window)/fs*10),
+                                                 debias::Bool=false, fftwflags::Uint32=FFTW.ESTIMATE)
+    n = length(window)
+    nfreq = length(freqrange)
+    npoints = length(points)
+    nfield = length(field)
+    dtype = outputtype(S)
+
+    # getindex() on ranges is a function call...
+    freqoff = freqrange[1]-1
+    winoff = window[1]-1
+
+    fftin = zeros(dtype, nfft)
+    fftout = Array(Complex{dtype}, nfft >> 1 + 1)
+
+    p = FFTW.Plan(fftin, fftout, 1, fftwflags, FFTW.NO_TIMELIMIT)
+
+    # Calculate PSD for each point and taper
+    spiketriggeredsum = zeros(dtype, n)
+    psdsum = zeros(dtype, nfreq)
+    @inbounds for j = 1:npoints
+        point = points[j]
+        if point-window[1] < 1
+            error("Not enough samples before point $j")
+        end
+        if point+window[end] > nfield
+            error("Not enough samples after point $j")
+        end
+
+        for l = 1:n
+            spiketriggeredsum[l] += field[point+winoff+l]
+        end
+
+        for i = 1:size(tapers, 2)
+            for l = 1:n
+                fftin[l] = tapers[l, i]*field[point+winoff+l]
+            end
+            FFTW.execute(dtype, p.plan)
+            for l = 1:nfreq
+                psdsum[l] += abs2(fftout[freqoff+l])
+            end
+        end
+    end
+
+    # Calculate PSD for spike triggered sum
+    spiketriggeredpsd = zeros(dtype, nfreq)
+    @inbounds for i = 1:size(tapers, 2)
+        for l = 1:n
+            fftin[l] = tapers[l, i]*spiketriggeredsum[l]
+        end
+        FFTW.execute(dtype, p.plan)
+        for l = 1:nfreq
+            spiketriggeredpsd[l] += abs2(fftout[freqoff+l])
+        end
+    end
+
+    if debias
+        @inbounds for l = 1:nfreq
+            spiketriggeredpsd[l] = (spiketriggeredpsd[l]*npoints - 1)/(npoints - 1)
+        end
+    else
+        @inbounds for l = 1:nfreq
+            spiketriggeredpsd[l] /= psdsum[l]
+        end
+    end
+    spiketriggeredpsd, scale!(spiketriggeredsum, 1/npoints)
+end
 
 #
 # Convenience functions
 #
-# Estimate power spectral density
+
 psd{T<:Real}(A::AbstractArray{T}; kw...) =
     multitaper(A, (PowerSpectrum{T}(),); kw...)[1]
 xspec{T<:Real}(A::Vector{T}, B::Vector{T}; kw...) =
@@ -389,8 +463,9 @@ coherence{T<:Real}(A::Vector{T}, B::Vector{T}; kw...) =
     multitaper(hcat(A, B), (Coherence{T}(),); kw...)[1]
 
 #
-# Functionality for multiple channels
+# Helper functions
 #
+
 # Get all pairs of channels
 function allpairs(n)
     pairs = Array(Int, 2, binomial(n, 2))
@@ -403,31 +478,37 @@ function allpairs(n)
     pairs
 end
 
-#
-# Helper functions
-#
-getpadding(n::Int, padparam::Bool) = padparam ? nextpow2(n) : n
-getpadding(n::Int, padparam::Int) = padparam
+# Copy FFT from one buffer to another, including only frequencies in
+# frange, simultaneously multiplying by multiplier, and correcting
+# edges according to nfft
+function copyscalefft!(fftview, fftout, frange, multiplier, nfft)
+    divisor = 1/sqrt(2)
+    @inbounds for k = 1:size(fftout, 2)
+        for l = 1:length(frange)
+            fftview[l, k] = fftout[frange[l], k]*multiplier
+        end
 
-# Scale real part of spectrum to satisfy Parseval's theorem
-# If sq is true, scale by sqrt of values (for FFTs)
-function scalespectrum!(spectrum::AbstractArray, n::Int, divisor::Real, sq::Bool=false)
-    d = 2/divisor
-    if sq; d = sqrt(d); end
-    scale!(spectrum, d)
-
-    s = size(spectrum, 1)
-    for i = 1:div(length(spectrum), s)
-        off = (i-1)*s+1
-        spectrum[off] /= sq ? sqrt(2) : 2
-        if iseven(n)
-            spectrum[off+div(n, 2)] /= sq ? sqrt(2) : 2
+        # Correct edges of FFT so that all power is in the same units
+        # This is necessary because the FFT divides power associated
+        # with real signals between real and imaginary frequencies,
+        # except for power at 0 and FMAX. We don't compute the
+        # imaginary frequencies, but we do need to scale the FFT so
+        # that the power is correct.
+        if frange[1] == 1
+            fftview[1, k] *= divisor
+        end
+        if frange[end] == size(fftout, 1) && iseven(nfft)
+            fftview[end, k] *= divisor
         end
     end
-    spectrum
 end
 
 # Get the equivalent complex type for a given type
 complextype{T<:Complex}(::Type{T}) = T
 complextype{T}(::Type{T}) = Complex{T}
+
+# Get preferred output type for a given input type
+outputtype{T<:FloatingPoint}(::Type{T}) = T
+outputtype(::Union(Type{Int8}, Type{Uint8}, Type{Int16}, Type{Uint16})) = Float32
+outputtype{T<:Real}(::Type{T}) = Float64
 end
