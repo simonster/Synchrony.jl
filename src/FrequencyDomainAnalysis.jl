@@ -303,8 +303,8 @@ end
 
 # Compute frequencies based on length of padded FFT, with limits
 function frequencies(nfft::Int, fs::Real, fmin::Real, fmax::Real=Inf)
-    freq = frequencies(nfft, fs)
-    freqrange = searchsortedfirst(allfreq, fmin):(fmax == Inf ? length(allfreq) : searchsortedlast(allfreq, fmax))
+    (freq,) = frequencies(nfft, fs)
+    freqrange = searchsortedfirst(freq, fmin):(fmax == Inf ? length(freq) : searchsortedlast(freq, fmax))
     (freq[freqrange], freqrange)
 end
 
@@ -427,7 +427,10 @@ function spikefieldcoherence{T<:Integer,S<:Real}(points::AbstractVector{T}, fiel
         end
     end
 
-    # Calculate PSD for spike triggered sum
+    scale!(psdsum, 1/npoints)
+    scale!(spiketriggeredsum, 1/npoints)
+
+    # Calculate PSD for spike triggered average
     spiketriggeredpsd = zeros(dtype, nfreq)
     @inbounds for i = 1:size(tapers, 2)
         for l = 1:n
@@ -441,14 +444,14 @@ function spikefieldcoherence{T<:Integer,S<:Real}(points::AbstractVector{T}, fiel
 
     if debias
         @inbounds for l = 1:nfreq
-            spiketriggeredpsd[l] = (spiketriggeredpsd[l]*npoints - 1)/(npoints - 1)
+            spiketriggeredpsd[l] = (spiketriggeredpsd[l]/psdsum[l]*npoints - 1)/(npoints - 1)
         end
     else
         @inbounds for l = 1:nfreq
             spiketriggeredpsd[l] /= psdsum[l]
         end
     end
-    spiketriggeredpsd, scale!(spiketriggeredsum, 1/npoints)
+    spiketriggeredpsd, spiketriggeredsum
 end
 
 #
