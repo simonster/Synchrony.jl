@@ -22,7 +22,7 @@ using NumericExtensions
 
 export PowerSpectrum, CrossSpectrum, Coherence, Coherency, PLV, PPC, PLI, PLI2Unbiased, WPLI,
        WPLI2Debiased, dpss, multitaper, psd, xspec, coherence, spikefieldcoherence,
-       allpairs, frequencies
+       pointfieldstat, allpairs, frequencies
 
 #
 # Statistics computed on transformed data
@@ -317,7 +317,7 @@ frequencies{T<:Real}(A::Union(AbstractVector{T}, AbstractMatrix{T}, AbstractArra
 # A is samples x channels x trials
 function multitaper{T<:Real}(A::Union(AbstractVector{T}, AbstractMatrix{T}, AbstractArray{T,3}),
                              stats::(ContinuousTransformStatistic, ContinuousTransformStatistic...);
-                             tapers::Matrix=dpss(size(A, 1), 4), nfft::Int=nextpow2(size(A, 1)),
+                             tapers::Union(Vector, Matrix)=dpss(size(A, 1), 4), nfft::Int=nextpow2(size(A, 1)),
                              fs::Real=1.0, freqrange::Range1{Int}=1:(nfft >> 1 + 1),
                              fftwflags::Uint32=FFTW.ESTIMATE)
     n = size(A, 1)
@@ -377,31 +377,38 @@ multitaper{T<:Real,S<:ContinuousTransformStatistic}(A::Union(AbstractVector{T}, 
 # finite number of spikes. Journal of Neurophysiology, 104(1), 548–558.
 # doi:10.1152/jn.00610.2009
 #
-# This is not (quite) the same thing as the spike-train to field
-# coherence measure in Jarvis & Mitra, 2001!
+# This is not (quite) the same thing as the spike field coherence
+# measure in Jarvis & Mitra, 2001 and implemented in Chronux!
+hann(n) = 0.5*(1-cos(2*pi*(0:n-1)/(n-1)))
+macro pfparams()
+    esc(quote
+        n = length(window)
+        nfreq = length(freqrange)
+        npoints = length(points)
+        nfield = length(field)
+        dtype = outputtype(S)
+
+        # getindex() on ranges is a function call...
+        freqoff = freqrange[1]-1
+        winoff = window[1]-1
+
+        fftin = zeros(dtype, nfft)
+        fftout = Array(Complex{dtype}, nfft >> 1 + 1)
+
+        p = FFTW.Plan(fftin, fftout, 1, fftwflags, FFTW.NO_TIMELIMIT)
+    end)
+end
 function spikefieldcoherence{T<:Integer,S<:Real}(points::AbstractVector{T}, field::AbstractVector{S},
                                                  window::Range1{Int};
                                                  nfft::Int=nextpow2(length(window)),
                                                  fs::Real=1.0, freqrange::Range1{Int}=1:(nfft >> 1 + 1),
-                                                 tapers::Matrix=dpss(length(window), length(window)/fs*10),
+                                                 tapers::Union(Vector, Matrix)=hann(length(window)),#dpss(length(window), length(window)/fs*10),
                                                  debias::Bool=false, fftwflags::Uint32=FFTW.ESTIMATE)
-    n = length(window)
-    nfreq = length(freqrange)
-    npoints = length(points)
-    nfield = length(field)
-    dtype = outputtype(S)
-
-    # getindex() on ranges is a function call...
-    freqoff = freqrange[1]-1
-    winoff = window[1]-1
-
-    fftin = zeros(dtype, nfft)
-    fftout = Array(Complex{dtype}, nfft >> 1 + 1)
-
-    p = FFTW.Plan(fftin, fftout, 1, fftwflags, FFTW.NO_TIMELIMIT)
+    @pfparams
 
     # Calculate PSD for each point and taper
     spiketriggeredsum = zeros(dtype, n)
+    tmp = zeros(dtype, n)
     psdsum = zeros(dtype, nfreq)
     @inbounds for j = 1:npoints
         point = points[j]
@@ -413,12 +420,13 @@ function spikefieldcoherence{T<:Integer,S<:Real}(points::AbstractVector{T}, fiel
         end
 
         for l = 1:n
-            spiketriggeredsum[l] += field[point+winoff+l]
+            tmp[l] = field[point+winoff+l]
+            spiketriggeredsum[l] += tmp[l]
         end
 
         for i = 1:size(tapers, 2)
             for l = 1:n
-                fftin[l] = tapers[l, i]*field[point+winoff+l]
+                fftin[l] = tapers[l, i]*tmp[l]
             end
             FFTW.execute(dtype, p.plan)
             for l = 1:nfreq
@@ -427,14 +435,14 @@ function spikefieldcoherence{T<:Integer,S<:Real}(points::AbstractVector{T}, fiel
         end
     end
 
-    scale!(psdsum, 1/npoints)
+    scale!(psdsum, 1/(npoints*size(tapers, 2)))
     scale!(spiketriggeredsum, 1/npoints)
 
     # Calculate PSD for spike triggered average
     spiketriggeredpsd = zeros(dtype, nfreq)
     @inbounds for i = 1:size(tapers, 2)
         for l = 1:n
-            fftin[l] = tapers[l, i]*spiketriggeredsum[l]
+            fftin[l] = tapers[l, i]*(spiketriggeredsum[l])#-m
         end
         FFTW.execute(dtype, p.plan)
         for l = 1:nfreq
@@ -444,14 +452,62 @@ function spikefieldcoherence{T<:Integer,S<:Real}(points::AbstractVector{T}, fiel
 
     if debias
         @inbounds for l = 1:nfreq
-            spiketriggeredpsd[l] = (spiketriggeredpsd[l]/psdsum[l]*npoints - 1)/(npoints - 1)
+            spiketriggeredpsd[l] = (spiketriggeredpsd[l]/(psdsum[l]*size(tapers, 2))*npoints - 1)/(npoints - 1)
         end
     else
         @inbounds for l = 1:nfreq
-            spiketriggeredpsd[l] /= psdsum[l]
+            spiketriggeredpsd[l] /= psdsum[l]*size(tapers, 2)
         end
     end
     spiketriggeredpsd, spiketriggeredsum
+end
+
+#
+# Point-field PLV/PPC
+#
+# For PLV, see above.
+#
+# For PPC, see Vinck, M., Battaglia, F. P., Womelsdorf, T., & Pennartz,
+# C. (2012). Improved measures of phase-coupling between spikes and the
+# Local Field Potential. Journal of Computational Neuroscience, 33(1),
+# 53–75. doi:10.1007/s10827-011-0374-4
+function pointfieldstat{T<:Integer,S<:Real}(points::AbstractVector{T}, field::AbstractVector{S},
+                                            window::Range1{Int};
+                                            nfft::Int=nextpow2(length(window)),
+                                            fs::Real=1.0, freqrange::Range1{Int}=1:(nfft >> 1 + 1),
+                                            tapers::Union(Vector, Matrix)=hann(length(window)),
+                                            ppc::Bool=true, fftwflags::Uint32=FFTW.ESTIMATE)
+    @pfparams
+
+    # Sum of phase for each point and taper
+    phasesum = zeros(Complex{dtype}, nfreq)
+    @inbounds for j = 1:npoints
+        point = points[j]
+        if point-window[1] < 1
+            error("Not enough samples before point $j")
+        end
+        if point+window[end] > nfield
+            error("Not enough samples after point $j")
+        end
+
+        for i = 1:size(tapers, 2)
+            for l = 1:n
+                fftin[l] = tapers[l, i]*field[point+winoff+l]
+            end
+            FFTW.execute(dtype, p.plan)
+            for l = 1:nfreq
+                res = fftout[freqoff+l]
+                phasesum[l] += res/abs(res)
+            end
+        end
+    end
+    scale!(phasesum, 1/size(tapers, 2))
+
+    if ppc
+        [(abs2(x) - npoints)/(npoints*(npoints-1)) for x in phasesum]
+    else
+        [abs(x)/npoints for x in phasesum]
+    end
 end
 
 #
@@ -512,6 +568,6 @@ complextype{T}(::Type{T}) = Complex{T}
 
 # Get preferred output type for a given input type
 outputtype{T<:FloatingPoint}(::Type{T}) = T
-outputtype(::Union(Type{Int8}, Type{Uint8}, Type{Int16}, Type{Uint16})) = Float32
+outputtype(::Union(Type{Int8}, Type{Uint8}, Type{Int16}, Type{Uint16})) = Float64
 outputtype{T<:Real}(::Type{T}) = Float64
 end
