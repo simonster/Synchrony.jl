@@ -465,18 +465,13 @@ end
 #
 # Point-field PLV/PPC
 #
-# For PLV, see above.
-#
-# For PPC, see Vinck, M., Battaglia, F. P., Womelsdorf, T., & Pennartz,
-# C. (2012). Improved measures of phase-coupling between spikes and the
-# Local Field Potential. Journal of Computational Neuroscience, 33(1),
-# 53–75. doi:10.1007/s10827-011-0374-4
+# See above for references.
 function pointfieldstat{T<:Integer,S<:Real}(points::AbstractVector{T}, field::AbstractVector{S},
                                             window::Range1{Int};
                                             nfft::Int=nextpow2(length(window)),
                                             fs::Real=1.0, freqrange::Range1{Int}=1:(nfft >> 1 + 1),
                                             tapers::Union(Vector, Matrix)=hann(length(window)),
-                                            ppc::Bool=true, fftwflags::Uint32=FFTW.ESTIMATE)
+                                            method::ASCIIString="ppc", fftwflags::Uint32=FFTW.ESTIMATE)
     @pfparams
 
     # Sum of phase for each point and taper
@@ -503,10 +498,85 @@ function pointfieldstat{T<:Integer,S<:Real}(points::AbstractVector{T}, field::Ab
     end
     scale!(phasesum, 1/size(tapers, 2))
 
-    if ppc
+    if method == "ppc"
         [(abs2(x) - npoints)/(npoints*(npoints-1)) for x in phasesum]
-    else
+    elseif method == "plv"
         [abs(x)/npoints for x in phasesum]
+    else
+        error("Invalid method $method")
+    end
+end
+
+#
+# Point-field PLV/PPC with stratification by trial
+#
+# See Vinck, M., Battaglia, F. P., Womelsdorf, T., & Pennartz, C.
+# (2012). Improved measures of phase-coupling between spikes and the
+# Local Field Potential. Journal of Computational Neuroscience, 33(1),
+# 53–75. doi:10.1007/s10827-011-0374-4
+function pointfieldstat{T<:Integer,U<:Integer,S<:Real}(
+points::AbstractVector{T}, trials::AbstractVector{U}, field::AbstractVector{S},
+window::Range1{Int}; nfft::Int=nextpow2(length(window)), fs::Real=1.0,
+freqrange::Range1{Int}=1:(nfft >> 1 + 1),
+tapers::Union(Vector, Matrix)=hann(length(window)),
+method::ASCIIString="ppc2", fftwflags::Uint32=FFTW.ESTIMATE)
+    if length(trials) != length(points)
+        error("Trials and points must be the same length")
+    end
+    @pfparams
+
+    lasttrial = typemin(U)
+    intrial = 0
+    ntrial = 0
+    nintrial2 = 0
+
+    # Sum of phase for each point and taper
+    phasesum = zeros(Complex{dtype}, nfreq)
+    phasesum2 = zeros(dtype, nfreq)
+    trialsum = zeros(Complex{dtype}, nfreq)
+    @inbounds for j = 1:npoints
+        point = points[j]
+        if point-window[1] < 1
+            error("Not enough samples before point $j")
+        end
+        if point+window[end] > nfield
+            error("Not enough samples after point $j")
+        end
+
+        trial = trials[j]
+        if trial != lasttrial && intrial != 0
+            scale!(trialsum, 1/intrial)
+            phasesum += trialsum
+            phasesum2 += abs2(trialsum)
+            nintrial2 += abs2(intrial)
+            ntrial += 1
+
+            fill!(trialsum, 0.0+0.0im)
+            intrial = 0
+        end
+
+        for i = 1:size(tapers, 2)
+            for l = 1:n
+                fftin[l] = tapers[l, i]*field[point+winoff+l]
+            end
+            FFTW.execute(dtype, p.plan)
+            for l = 1:nfreq
+                res = fftout[freqoff+l]
+                trialsum[l] += res/abs(res)
+            end
+
+            intrial += 1
+        end
+    end
+
+    if method == "ppc2"
+        [(abs2(phasesum[i]) - phasesum2[i])/(abs2(npoints) - nintrial2) for i = 1:length(phasesum)]
+    elseif method == "ppc1"
+        [(abs2(phasesum[i]) - phasesum2[i])/(ntrial*(ntrial-1)) for i = 1:length(phasesum)]
+    elseif method == "plv"
+        [abs(x)/ntrial for x in phasesum]
+    else
+        error("Invalid method $method")
     end
 end
 
