@@ -17,8 +17,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-export spiketriggeredspectrum, pfcoherence, pfplv, pfppc0, pfppc1, pfppc2,
-       pointfieldstat
+export spiketriggeredspectrum, pfcoherence, pfplv, pfppc0, pfppc1, pfppc2
 
 #
 # Perform tapered FFT of individual spikes embedded in a continuous signal
