@@ -20,15 +20,16 @@
 module FrequencyDomainAnalysis
 using NumericExtensions
 
-export PowerSpectrum, CrossSpectrum, Coherence, Coherency, PLV, PPC, PLI, PLI2Unbiased, WPLI,
-       WPLI2Debiased, dpss, multitaper, psd, xspec, coherence, spikefieldcoherence,
-       pointfieldstat, allpairs, frequencies
+export PowerSpectrum, PowerSpectrumVariance, CrossSpectrum, Coherence, Coherency, PLV, PPC, PLI,
+       PLI2Unbiased, WPLI, WPLI2Debiased, ShiftPredictor, dpss, multitaper, psd, xspec, coherence,
+       spiketriggeredspectrum, pfcoherence, pfplv, pfppc0, pfppc1, pfppc2, pointfieldstat,
+       allpairs, frequencies
 
 #
 # Statistics computed on transformed data
 #
-abstract ContinuousTransformStatistic{T<:Real}
-abstract PairwiseTransformStatistic{T<:Real} <: ContinuousTransformStatistic{T}
+abstract TransformStatistic{T<:Real}
+abstract PairwiseTransformStatistic{T<:Real} <: TransformStatistic{T}
 
 # Generate a new PairwiseTransformStatistic, including constructors
 macro pairwisestat(name, xtype)
@@ -36,6 +37,8 @@ macro pairwisestat(name, xtype)
         type $name{T<:Real} <: PairwiseTransformStatistic{T}
             pairs::Array{Int, 2}
             x::$xtype
+            nepochs::Vector{Int}
+            tmp::BitVector
             $name() = new()
             $name(pairs::Array{Int, 2}) = new(pairs)
         end
@@ -44,24 +47,43 @@ macro pairwisestat(name, xtype)
 end
 
 # Most PairwiseTransformStatistics will initialize their fields the same way
-function init{T}(s::PairwiseTransformStatistic{T}, nout, nchannels, nepochs)
+function init{T}(s::PairwiseTransformStatistic{T}, nout, nchannels, ntapers)
     if !isdefined(s, :pairs); s.pairs = allpairs(nchannels); end
     s.x = zeros(eltype(fieldtype(s, :x)), nout, size(s.pairs, 2))
+    s.nepochs = zeros(Int, size(s.pairs, 2))
+    s.tmp = falses(nchannels)
 end
 
 # Create accumulate function that loops over pairs of channels, performing some transform for each
 macro accumulatebypair(stat, arr, freqindex, pairindex, ch1ft, ch2ft, code)
     quote
-        function $(esc(:accumulate))(s::$stat, fftout)
+        # Split out the two FFTs to allow efficient computation in shift predictor case
+        function $(esc(:accumulatepairs))(s::$stat, fftout1, fftout2, itaper)
             $arr = s.x
+            tmp = s.tmp
             pairs = s.pairs
+            nepochs = s.nepochs
             @inbounds begin
+                # Find channels with NaNs
+                for i = 1:size(fftout1, 2)
+                    good = true
+                    for j = 1:size(fftout1, 1)
+                        good &= !isnan(real(fftout1[j, i])) & !isnan(real(fftout2[j, i]))
+                    end
+                    tmp[i] = good
+                end
+
                 for $pairindex = 1:size(pairs, 2)
                     ch1 = pairs[1, $pairindex]
                     ch2 = pairs[2, $pairindex]
-                    for $freqindex = 1:size(fftout, 1)
-                        $ch1ft = fftout[$freqindex, ch1]
-                        $ch2ft = fftout[$freqindex, ch2]
+
+                    # Skip channels with NaNs
+                    if !tmp[ch1] || !tmp[ch2] continue end
+                    nepochs[$pairindex] += 1
+
+                    for $freqindex = 1:size(fftout1, 1)
+                        $ch1ft = fftout1[$freqindex, ch1]
+                        $ch2ft = fftout2[$freqindex, ch2]
                         $code
                     end
                 end
@@ -70,24 +92,85 @@ macro accumulatebypair(stat, arr, freqindex, pairindex, ch1ft, ch2ft, code)
     end
 end
 
+accumulate(s::PairwiseTransformStatistic, fftout, itaper) =
+    accumulatepairs(s, fftout, fftout, itaper)
+
 #
 # Power spectrum
 #
-type PowerSpectrum{T<:Real} <: ContinuousTransformStatistic{T}
+type PowerSpectrum{T<:Real} <: TransformStatistic{T}
     x::Array{T, 2}
+    nepochs::Vector{Int}
     PowerSpectrum() = new()
 end
 PowerSpectrum() = PowerSpectrum{Float64}()
-function init{T}(s::PowerSpectrum{T}, nout, nchannels, nepochs)
+function init{T}(s::PowerSpectrum{T}, nout, nchannels, ntapers)
     s.x = zeros(T, nout, nchannels)
+    s.nepochs = zeros(Int, nchannels)
 end
-function accumulate(s::PowerSpectrum, fftout)
+function accumulate(s::PowerSpectrum, fftout, itaper)
     A = s.x
-    for i = 1:length(fftout)
-        @inbounds A[i] += abs2(fftout[i])
+    @inbounds for i = 1:size(fftout, 2)
+        # Skip channels with NaNs
+        good = true
+        for j = 1:size(fftout, 1)
+            good &= !isnan(real(fftout[j, i]))
+        end
+        if !good continue end
+
+        s.nepochs[i] += 1
+        for j = 1:size(fftout, 1)
+            A[j, i] += abs2(fftout[j, i])
+        end
     end
 end
-finish(s::PowerSpectrum, nepochs) = scale!(s.x, 1/nepochs)
+finish(s::PowerSpectrum) = scale!(s.x, 1./s.nepochs)
+
+#
+# Variance of power spectrum across trials
+#
+type PowerSpectrumVariance{T<:Real} <: TransformStatistic{T}
+    x::Array{T, 3}
+    ntrials::Vector{Int}
+    ntapers::Int
+    PowerSpectrumVariance() = new()
+end
+PowerSpectrumVariance() = PowerSpectrum{Float64}()
+function init{T}(s::PowerSpectrumVariance{T}, nout, nchannels, ntapers)
+    s.x = zeros(T, 3, nout, nchannels)
+    s.ntrials = zeros(Int, nchannels)
+    s.ntapers = ntapers
+end
+function accumulate(s::PowerSpectrumVariance, fftout, itaper)
+    @inbounds begin
+        A = s.x
+        for i = 1:size(fftout, 2), j = 1:size(fftout, 1)
+            A[1, j, i] += abs2(fftout[j, i])
+        end
+        if itaper == s.ntapers
+            for i = 1:size(A, 3)
+                # Skip channels with NaNs
+                good = true
+                for j = 1:size(A, 2)
+                    good &= !isnan(real(A[1, j, i]))
+                end
+                if !good continue end
+
+                # http://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Online_algorithm
+                n = (s.ntrials[i] += 1) # n = n + 1
+                for j = 1:size(A, 2)
+                    x = A[1, j, i]
+                    mean = A[2, j, i]
+                    delta = x - mean
+                    mean = mean + delta/n
+                    A[3, j, i] += delta*(x - mean) # M2 = M2 + delta*(x - mean)
+                    A[2, j, i] = mean
+                end
+            end
+        end
+    end
+end
+finish(s::PowerSpectrumVariance) = scale!(squeeze(s.x[3, :, :], 1), 1./(s.ntrials - 1))
 
 #
 # Cross spectrum
@@ -96,7 +179,7 @@ finish(s::PowerSpectrum, nepochs) = scale!(s.x, 1/nepochs)
 @accumulatebypair CrossSpectrum A j i x y begin
     A[j, i] += conj(x)*y
 end
-finish(s::CrossSpectrum, nepochs) = scale!(s.x, 1/nepochs)
+finish(s::CrossSpectrum) = scale!(s.x, 1./s.nepochs)
 
 #
 # Coherency and coherence
@@ -113,20 +196,20 @@ for sym in (:Coherency, :Coherence)
         $sym() = $sym{Float64}()
     end
 end
-function init{T}(s::Union(Coherency{T}, Coherence{T}), nout, nchannels, nepochs)
+function init{T}(s::Union(Coherency{T}, Coherence{T}), nout, nchannels, ntapers)
     if !isdefined(s, :pairs); s.pairs = allpairs(nchannels); end
     s.psd = PowerSpectrum{T}()
     s.xspec = CrossSpectrum{T}(s.pairs)
-    init(s.psd, nout, nchannels, nepochs)
-    init(s.xspec, nout, nchannels, nepochs)
+    init(s.psd, nout, nchannels, ntapers)
+    init(s.xspec, nout, nchannels, ntapers)
 end
-function accumulate(s::Union(Coherency, Coherence), fftout)
-    accumulate(s.psd, fftout)
-    accumulate(s.xspec, fftout)
+function accumulatepairs(s::Union(Coherency, Coherence), fftout1, fftout2, itaper)
+    accumulate(s.psd, fftout1, itaper)
+    accumulatepairs(s.xspec, fftout1, fftout2, itaper)
 end
-function finish(s::Coherency, nepochs)
-    psd = finish(s.psd, nepochs)
-    xspec = finish(s.xspec, nepochs)
+function finish(s::Coherency)
+    psd = finish(s.psd)
+    xspec = finish(s.xspec)
     pairs = s.pairs
     for i = 1:size(pairs, 2)
         ch1 = pairs[1, i]
@@ -137,9 +220,9 @@ function finish(s::Coherency, nepochs)
     end
     xspec
 end
-function finish{T}(s::Coherence{T}, nepochs)
-    psd = finish(s.psd, nepochs)
-    xspec = finish(s.xspec, nepochs)
+function finish{T}(s::Coherence{T})
+    psd = finish(s.psd)
+    xspec = finish(s.xspec)
     out = zeros(T, size(xspec, 1), size(xspec, 2))
     pairs = s.pairs
     for i = 1:size(pairs, 2)
@@ -173,13 +256,16 @@ end
     # Faster, but less precise
     #A[j, i] += z*(1/sqrt(abs2(real(z))+abs2(imag(z))))
 end
-finish(s::PLV, nepochs) = scale!(abs(s.x), 1/nepochs)
-function finish{T}(s::PPC{T}, nepochs)
+finish(s::PLV) = scale!(abs(s.x), 1./s.nepochs)
+function finish{T}(s::PPC{T})
     out = zeros(T, size(s.x, 1), size(s.x, 2))
-    for i = 1:length(out)
-        # This is equivalent to the formulation in Vinck et al. (2010), since
-        # 2*sum(unique pairs) = sum(trials)^2-n. 
-        out[i] = (abs2(s.x[i])-nepochs)/(nepochs*(nepochs-1))
+    for i = 1:size(s.x, 2)
+        nepochs = s.nepochs[i]
+        for j = 1:size(s.x, 1)
+            # This is equivalent to the formulation in Vinck et al. (2010), since
+            # 2*sum(unique pairs) = sum(trials)^2-n. 
+            out[j, i] = (abs2(s.x[j, i])-nepochs)/(nepochs*(nepochs-1))
+        end
     end
     out
 end
@@ -205,17 +291,23 @@ end
         A[j, i] += 2*(z > 0)-1
     end
 end
-function finish{T}(s::PLI{T}, nepochs)
+function finish{T}(s::PLI{T})
     out = zeros(T, size(s.x, 1), size(s.x, 2))
-    for i = 1:length(out)
-        out[i] = abs(s.x[i])/nepochs
+    for i = 1:size(s.x, 2)
+        nepochs = s.nepochs[i]
+        for j = 1:size(s.x, 1)
+            out[j. i] = abs(s.x[j, i])/nepochs
+        end
     end
     out
 end
-function finish{T}(s::PLI2Unbiased{T}, nepochs)
+function finish{T}(s::PLI2Unbiased{T})
     out = zeros(T, size(s.x, 1), size(s.x, 2))
-    for i = 1:length(out)
-        out[i] = (nepochs * abs2(s.x[i]/nepochs) - 1)/(nepochs - 1)
+    for i = 1:size(s.x, 2)
+        nepochs = s.nepochs[i]
+        for j = 1:size(s.x, 1)
+            out[j, i] = (nepochs * abs2(s.x[j, i]/nepochs) - 1)/(nepochs - 1)
+        end
     end
     out
 end
@@ -226,9 +318,11 @@ end
 # See Vinck et al. (2011) as above.
 @pairwisestat WPLI Array{T,3}
 # We need 2 fields per freq/channel in s.x
-function init{T}(s::WPLI{T}, nout, nchannels, nepochs)
+function init{T}(s::WPLI{T}, nout, nchannels, ntapers)
     if !isdefined(s, :pairs); s.pairs = allpairs(nchannels); end
     s.x = zeros(eltype(fieldtype(s, :x)), 2, nout, size(s.pairs, 2))
+    s.nepochs = zeros(Int, size(s.pairs, 2))
+    s.tmp = falses(nchannels)
 end
 @accumulatebypair WPLI A j i x y begin
     z = imag(conj(x)*y)
@@ -249,9 +343,11 @@ end
 # See Vinck et al. (2011) as above.
 @pairwisestat WPLI2Debiased Array{T,3}
 # We need 3 fields per freq/channel in s.x
-function init{T}(s::WPLI2Debiased{T}, nout, nchannels, nepochs)
+function init{T}(s::WPLI2Debiased{T}, nout, nchannels, ntapers)
     if !isdefined(s, :pairs); s.pairs = allpairs(nchannels); end
     s.x = zeros(eltype(fieldtype(s, :x)), 3, nout, size(s.pairs, 2))
+    s.nepochs = zeros(Int, size(s.pairs, 2))
+    s.tmp = falses(nchannels)
 end
 @accumulatebypair WPLI2Debiased A j i x y begin
     z = imag(conj(x)*y)
@@ -259,15 +355,59 @@ end
     A[2, j, i] += abs(z)
     A[3, j, i] += abs2(z)
 end
-function finish{T}(s::WPLI2Debiased{T}, nepochs)
+function finish{T}(s::WPLI2Debiased{T})
     out = zeros(T, size(s.x, 2), size(s.x, 3))
     for i = 1:size(out, 2), j = 1:size(out, 1)
         imcsd = s.x[1, j, i]
         absimcsd = s.x[2, j, i]
         sqimcsd = s.x[3, j, i]
-        out[j, i] = (abs2(imcsd) - sqimcsd)/(abs2(imcsd) - sqimcsd)
+        out[j, i] = (abs2(imcsd) - sqimcsd)/(absimcsd - sqimcsd)
     end
     out
+end
+
+#
+# Shift predictors
+#
+type ShiftPredictor{T<:Real,S<:PairwiseTransformStatistic} <: TransformStatistic{T}
+    stat::S
+    first::Array{Complex{T}, 3}
+    previous::Array{Complex{T}, 3}
+    isfirst::Bool
+end
+ShiftPredictor{T}(stat::PairwiseTransformStatistic{T}) =
+    ShiftPredictor{T,typeof(stat)}(stat, Array(Complex{T}, 0, 0, 0), Array(Complex{T}, 0, 0, 0), true)
+
+function init{T}(s::ShiftPredictor{T}, nout, nchannels, ntapers)
+    s.first = Array(Complex{T}, nout, nchannels, ntapers)
+    s.previous = Array(Complex{T}, nout, nchannels, ntapers)
+    s.isfirst = true
+    init(s.stat, nout, nchannels, ntapers)
+end
+function accumulate(s::ShiftPredictor, fftout, itaper)
+    first = pointer_to_array(pointer(s.first, size(s.first, 1)*size(s.first, 2)*(itaper - 1)+1),
+                             (size(s.first, 1), size(s.first, 2)), false)
+    previous = pointer_to_array(pointer(s.previous, size(s.previous, 1)*size(s.previous, 2)*(itaper - 1)+1),
+                                (size(s.previous, 1), size(s.previous, 2)), false)
+    if s.isfirst
+        copy!(first, fftout)
+        s.isfirst = itaper != size(s.first, 3)
+    else
+        accumulatepairs(s.stat, previous, fftout, itaper)
+    end
+    copy!(previous, fftout)
+end
+function finish(s::ShiftPredictor)
+    if !s.isfirst
+        for itaper = 1:size(s.first, 3)
+            first = pointer_to_array(pointer(s.first, size(s.first, 1)*size(s.first, 2)*(itaper - 1)+1),
+                                     (size(s.first, 1), size(s.first, 2)), false)
+            previous = pointer_to_array(pointer(s.previous, size(s.previous, 1)*size(s.previous, 2)*(itaper - 1)+1),
+                                        (size(s.previous, 1), size(s.previous, 2)), false)
+            accumulatepairs(s.stat, previous, first, itaper)
+        end
+    end
+    finish(s.stat)
 end
 
 #
@@ -295,6 +435,9 @@ function dpss(n::Int, nw::Real, ntapers::Int=iceil(2*nw)-1)
     scale!(v, sgn)
 end
 
+# Compute Hann window for n samples
+hann(n) = 0.5*(1-cos(2*pi*(0:n-1)/(n-1)))
+
 # Compute frequencies based on length of padded FFT
 function frequencies(nfft::Int, fs::Real=1.0)
     freq = (0:div(nfft, 2))*(fs/nfft)
@@ -316,19 +459,17 @@ frequencies{T<:Real}(A::Union(AbstractVector{T}, AbstractMatrix{T}, AbstractArra
 # Perform tapered FFT of continuous signals
 # A is samples x channels x trials
 function multitaper{T<:Real}(A::Union(AbstractVector{T}, AbstractMatrix{T}, AbstractArray{T,3}),
-                             stats::(ContinuousTransformStatistic, ContinuousTransformStatistic...);
+                             stats::(TransformStatistic, TransformStatistic...);
                              tapers::Union(Vector, Matrix)=dpss(size(A, 1), 4), nfft::Int=nextpow2(size(A, 1)),
-                             fs::Real=1.0, freqrange::Range1{Int}=1:(nfft >> 1 + 1),
-                             fftwflags::Uint32=FFTW.ESTIMATE)
+                             fs::Real=1.0, freqrange::Range1{Int}=1:(nfft >> 1 + 1))
     n = size(A, 1)
     nout = nfft >> 1 + 1
     ntapers = size(tapers, 2)
     nchannels = size(A, 2)
-    nepochs = size(A, 3)*ntapers
     multiplier = sqrt(2/fs)
 
     for stat in stats
-        init(stat, length(freqrange), nchannels, nepochs)
+        init(stat, length(freqrange), nchannels, ntapers)
     end
 
     dtype = outputtype(T)
@@ -337,9 +478,9 @@ function multitaper{T<:Real}(A::Union(AbstractVector{T}, AbstractMatrix{T}, Abst
     #fftview = sub(fftout, freqrange, 1:size(A,2))
     fftview = zeros(Complex{dtype}, length(freqrange), size(A, 2))
 
-    p = FFTW.Plan(fftin, fftout, 1, fftwflags, FFTW.NO_TIMELIMIT)
+    p = FFTW.Plan(fftin, fftout, 1, FFTW.ESTIMATE, FFTW.NO_TIMELIMIT)
 
-    for i = 1:ntapers, j = 1:size(A, 3)
+    for j = 1:size(A, 3), i = 1:ntapers
         @inbounds for k = 1:nchannels, l = 1:n
             fftin[l, k] = A[l, k, j]*tapers[l, i]
         end
@@ -348,11 +489,11 @@ function multitaper{T<:Real}(A::Union(AbstractVector{T}, AbstractMatrix{T}, Abst
         copyscalefft!(fftview, fftout, freqrange, multiplier, nfft)
 
         for stat in stats
-            accumulate(stat, fftview)
+            accumulate(stat, fftview, i)
         end
     end
 
-    [finish(stat, nepochs) for stat in stats]
+    [finish(stat) for stat in stats]
 end
 
 # Calling with types instead of instances
@@ -361,8 +502,61 @@ multitaper{T<:Real}(A::Union(AbstractVector{T}, AbstractMatrix{T}, AbstractArray
     multitaper(A, tuple([x{outputtype(T)}() for x in stat]...); kw...)
 
 # Calling with a single type or instance
-multitaper{T<:Real,S<:ContinuousTransformStatistic}(A::Union(AbstractVector{T}, AbstractMatrix{T}, AbstractArray{T,3}),
-                                                    stat::Union(S, Type{S}); kw...) = multitaper(A, (stat,); kw...)[1]
+multitaper{T<:Real,S<:TransformStatistic}(A::Union(AbstractVector{T}, AbstractMatrix{T}, AbstractArray{T,3}),
+                                          stat::Union(S, Type{S}); kw...) = multitaper(A, (stat,); kw...)[1]
+
+# Perform tapered FFT of individual spikes embedded in a continuous signal
+function spiketriggeredspectrum{T<:Integer,S<:Real}(points::AbstractVector{T}, field::AbstractVector{S},
+                                                    window::Range1{Int};
+                                                    nfft::Int=nextpow2(length(window)),
+                                                    freqrange::Range1{Int}=1:(nfft >> 1 + 1),
+                                                    tapers::Union(Vector, Matrix)=hann(length(window)))#dpss(length(window), length(window)/fs*10))
+    n = length(window)
+    nfreq = length(freqrange)
+    npoints = length(points)
+    nfield = length(field)
+    dtype = outputtype(S)
+
+    # getindex() on ranges is a function call...
+    freqoff = freqrange[1]-1
+    winoff = window[1]-1
+
+    fftin = zeros(dtype, nfft)
+    sts = Array(Complex{dtype}, length(freqrange), size(tapers, 2), npoints)
+    stw = Array(S, n, npoints)
+    fftout = zeros(Complex{dtype}, nfft >> 1 + 1)
+
+    p = FFTW.Plan(fftin, fftout, 1, FFTW.ESTIMATE, FFTW.NO_TIMELIMIT)
+
+    # Calculate PSD for each point and taper
+    @inbounds begin
+        for j = 1:npoints
+            point = points[j]
+            if point-window[1] < 1
+                error("Not enough samples before point $j")
+            end
+            if point+window[end] > nfield
+                error("Not enough samples after point $j")
+            end
+
+            for l = 1:n
+                stw[l, j] = field[point+winoff+l]
+            end
+
+            for i = 1:size(tapers, 2)
+                for l = 1:n
+                    fftin[l] = tapers[l, i]*stw[l, j]
+                end
+                FFTW.execute(p.plan, fftin, fftout)
+                for l = 1:nfreq
+                    sts[l, i, j] = fftout[freqoff+l]
+                end
+            end
+        end
+    end
+
+    (sts, stw)
+end
 
 #
 # Spike-field coherence
@@ -379,204 +573,169 @@ multitaper{T<:Real,S<:ContinuousTransformStatistic}(A::Union(AbstractVector{T}, 
 #
 # This is not (quite) the same thing as the spike field coherence
 # measure in Jarvis & Mitra, 2001 and implemented in Chronux!
-hann(n) = 0.5*(1-cos(2*pi*(0:n-1)/(n-1)))
-macro pfparams()
-    esc(quote
-        n = length(window)
-        nfreq = length(freqrange)
-        npoints = length(points)
-        nfield = length(field)
-        dtype = outputtype(S)
+function pfcoherence{T<:Real,S<:Real}(sts::Array{Complex{T},3}, stw::Array{S,2};
+                                      nfft::Int=nextpow2(length(sta)),
+                                      freqrange::Range1{Int}=1:(nfft >> 1 + 1),
+                                      tapers::Union(Vector, Matrix)=hann(length(window)),
+                                      debias::Bool=false)
+    if size(sts, 1) != length(freqrange)
+        error("Size of spike triggered spectrum must match number of frequencies to use")
+    end
+    npoints = size(sts, 3)
 
-        # getindex() on ranges is a function call...
-        freqoff = freqrange[1]-1
-        winoff = window[1]-1
-
-        fftin = zeros(dtype, nfft)
-        fftout = Array(Complex{dtype}, nfft >> 1 + 1)
-
-        p = FFTW.Plan(fftin, fftout, 1, fftwflags, FFTW.NO_TIMELIMIT)
-    end)
-end
-function spikefieldcoherence{T<:Integer,S<:Real}(points::AbstractVector{T}, field::AbstractVector{S},
-                                                 window::Range1{Int};
-                                                 nfft::Int=nextpow2(length(window)),
-                                                 fs::Real=1.0, freqrange::Range1{Int}=1:(nfft >> 1 + 1),
-                                                 tapers::Union(Vector, Matrix)=hann(length(window)),#dpss(length(window), length(window)/fs*10),
-                                                 debias::Bool=false, fftwflags::Uint32=FFTW.ESTIMATE)
-    @pfparams
-
-    # Calculate PSD for each point and taper
-    spiketriggeredsum = zeros(dtype, n)
-    tmp = zeros(dtype, n)
-    psdsum = zeros(dtype, nfreq)
-    @inbounds for j = 1:npoints
-        point = points[j]
-        if point-window[1] < 1
-            error("Not enough samples before point $j")
+    # Calculate PSD of spike triggered average for each taper
+    fftin = zeros(T, nfft, size(tapers, 2))
+    sta = mean(stw, 2)
+    @inbounds begin
+        for i = 1:size(tapers, 2), l = 1:size(stw, 1)
+            fftin[l, i] = tapers[l, i]*sta[l]
         end
-        if point+window[end] > nfield
-            error("Not enough samples after point $j")
-        end
+    end
+    meanpsd = abs2(rfft(fftin, 1)[freqrange, :])
+    psdsum = sqsum!(Array(T, size(sts, 1), size(sts, 2)), sts, 3)
 
-        for l = 1:n
-            tmp[l] = field[point+winoff+l]
-            spiketriggeredsum[l] += tmp[l]
-        end
-
-        for i = 1:size(tapers, 2)
-            for l = 1:n
-                fftin[l] = tapers[l, i]*tmp[l]
+    # Calculate spike field coherence
+    sfc = zeros(T, size(sts, 1))
+    @inbounds begin
+        for i = 1:size(psdsum, 2), l = 1:size(psdsum, 1)
+            c = npoints*meanpsd[l, i]/psdsum[l, i]
+            if debias
+                c = (npoints*c - 1)/(npoints - 1)
             end
-            FFTW.execute(dtype, p.plan)
-            for l = 1:nfreq
-                psdsum[l] += abs2(fftout[freqoff+l])
-            end
+            sfc[l] += c
         end
     end
-
-    scale!(psdsum, 1/(npoints*size(tapers, 2)))
-    scale!(spiketriggeredsum, 1/npoints)
-
-    # Calculate PSD for spike triggered average
-    spiketriggeredpsd = zeros(dtype, nfreq)
-    @inbounds for i = 1:size(tapers, 2)
-        for l = 1:n
-            fftin[l] = tapers[l, i]*(spiketriggeredsum[l])#-m
-        end
-        FFTW.execute(dtype, p.plan)
-        for l = 1:nfreq
-            spiketriggeredpsd[l] += abs2(fftout[freqoff+l])
-        end
-    end
-
-    if debias
-        @inbounds for l = 1:nfreq
-            spiketriggeredpsd[l] = (spiketriggeredpsd[l]/(psdsum[l]*size(tapers, 2))*npoints - 1)/(npoints - 1)
-        end
-    else
-        @inbounds for l = 1:nfreq
-            spiketriggeredpsd[l] /= psdsum[l]*size(tapers, 2)
-        end
-    end
-    spiketriggeredpsd, spiketriggeredsum
+    scale!(sfc, 1.0/size(tapers, 2))
 end
 
 #
 # Point-field PLV/PPC
 #
-# See above for references.
-function pointfieldstat{T<:Integer,S<:Real}(points::AbstractVector{T}, field::AbstractVector{S},
-                                            window::Range1{Int};
-                                            nfft::Int=nextpow2(length(window)),
-                                            fs::Real=1.0, freqrange::Range1{Int}=1:(nfft >> 1 + 1),
-                                            tapers::Union(Vector, Matrix)=hann(length(window)),
-                                            method::ASCIIString="ppc", fftwflags::Uint32=FFTW.ESTIMATE)
-    @pfparams
-
-    # Sum of phase for each point and taper
-    phasesum = zeros(Complex{dtype}, nfreq)
-    @inbounds for j = 1:npoints
-        point = points[j]
-        if point-window[1] < 1
-            error("Not enough samples before point $j")
-        end
-        if point+window[end] > nfield
-            error("Not enough samples after point $j")
-        end
-
-        for i = 1:size(tapers, 2)
-            for l = 1:n
-                fftin[l] = tapers[l, i]*field[point+winoff+l]
-            end
-            FFTW.execute(dtype, p.plan)
-            for l = 1:nfreq
-                res = fftout[freqoff+l]
-                phasesum[l] += res/abs(res)
-            end
-        end
-    end
-    scale!(phasesum, 1/size(tapers, 2))
-
-    if method == "ppc"
-        [(abs2(x) - npoints)/(npoints*(npoints-1)) for x in phasesum]
-    elseif method == "plv"
-        [abs(x)/npoints for x in phasesum]
-    else
-        error("Invalid method $method")
-    end
-end
-
-#
-# Point-field PLV/PPC with stratification by trial
-#
 # See Vinck, M., Battaglia, F. P., Womelsdorf, T., & Pennartz, C.
 # (2012). Improved measures of phase-coupling between spikes and the
 # Local Field Potential. Journal of Computational Neuroscience, 33(1),
 # 53–75. doi:10.1007/s10827-011-0374-4
-function pointfieldstat{T<:Integer,U<:Integer,S<:Real}(
-points::AbstractVector{T}, trials::AbstractVector{U}, field::AbstractVector{S},
-window::Range1{Int}; nfft::Int=nextpow2(length(window)), fs::Real=1.0,
-freqrange::Range1{Int}=1:(nfft >> 1 + 1),
-tapers::Union(Vector, Matrix)=hann(length(window)),
-method::ASCIIString="ppc2", fftwflags::Uint32=FFTW.ESTIMATE)
-    if length(trials) != length(points)
-        error("Trials and points must be the same length")
+#
+# The code below computes these statistics using more efficient methods
+# than those described in Vinck et al. (2012). These efficient methods
+# are also used in FieldTrip (https://github.com/fieldtrip/fieldtrip),
+# although there is a bug in FieldTrip that makes its comptutations
+# incorrect. Derivation is available upon request.
+
+# Computes the sum of complex phases over third dimension
+function phasesum{T<:Real}(sts::Array{Complex{T},3})
+    ps = zeros(Complex{T}, size(sts, 1), size(sts, 2))
+    for i = 1:size(sts, 3), j = 1:size(sts, 2), k = 1:size(sts, 1)
+        v = sts[k, j, i]
+        ps[j, k] += v/abs(v)
     end
-    @pfparams
+end
 
-    lasttrial = typemin(U)
-    intrial = 0
-    ntrial = 0
-    nintrial2 = 0
+# Computes the sum of phases for each trial
+function phasesumtrial{T<:Real, U<:Integer}(sts::Array{Complex{T}, 3}, trials::AbstractVector{U})
+    if size(sts, 3) != length(trials)
+        error("length of trials does not match third dimension of spike-triggered spectrum")
+    end
+    nutrial = length(unique(trials))
+    pstrial = zeros(Complex{T}, size(sts, 1), size(sts, 2), nutrial)
+    nintrial = zeros(Int, nutrial)
 
-    # Sum of phase for each point and taper
-    phasesum = zeros(Complex{dtype}, nfreq)
-    phasesum2 = zeros(dtype, nfreq)
-    trialsum = zeros(Complex{dtype}, nfreq)
-    @inbounds for j = 1:npoints
-        point = points[j]
-        if point-window[1] < 1
-            error("Not enough samples before point $j")
-        end
-        if point+window[end] > nfield
-            error("Not enough samples after point $j")
-        end
+    trial = 1
+    lasttrial = trials[1]
+    @inbounds begin
+        for i = 1:size(sts, 3)
+            trial += trials[i] != lasttrial
+            lasttrial = trials[i]
 
-        trial = trials[j]
-        if trial != lasttrial && intrial != 0
-            scale!(trialsum, 1/intrial)
-            phasesum += trialsum
-            phasesum2 += abs2(trialsum)
-            nintrial2 += abs2(intrial)
-            ntrial += 1
-
-            fill!(trialsum, 0.0+0.0im)
-            intrial = 0
-        end
-
-        for i = 1:size(tapers, 2)
-            for l = 1:n
-                fftin[l] = tapers[l, i]*field[point+winoff+l]
+            nintrial[trial] += 1
+            for j = 1:size(sts, 2), k = 1:size(sts, 1)
+                v = sts[k, j, i]
+                v /= abs(v)
+                pstrial[k, j, trial] += v
             end
-            FFTW.execute(dtype, p.plan)
-            for l = 1:nfreq
-                res = fftout[freqoff+l]
-                trialsum[l] += res/abs(res)
-            end
-
-            intrial += 1
         end
     end
 
-    if method == "ppc2"
-        [(abs2(phasesum[i]) - phasesum2[i])/(abs2(npoints) - nintrial2) for i = 1:length(phasesum)]
-    elseif method == "ppc1"
-        [(abs2(phasesum[i]) - phasesum2[i])/(ntrial*(ntrial-1)) for i = 1:length(phasesum)]
-    elseif method == "plv"
-        [abs(x)/ntrial for x in phasesum]
+    (pstrial, nintrial)
+end
+
+# Computes the difference between the squared sum of pstrial along the
+# third dimension and the sum of squares of pstrial along the third
+# dimension. If jackknife is true, then also computes the jackknifed
+# difference.
+function pfdiffsq{T}(pstrial::Array{T,3}, jackknife::Bool)
+    pssum = sum(pstrial, 3)
+    pssqsum = sqsum(pstrial, 3)
+    tval = vec(sum(abs2(pssum) - pssqsum, 2))
+
+    if jackknife
+        jnval = zeros(T, size(pstrial, 1), size(pstrial, 3))
+        @inbounds begin
+            for i = 1:size(pstrial, 3), j = 1:size(pstrial, 2), k = 1:size(pstrial, 1)
+                v = pstrial[k, j, i]
+                jnval[k, i] += abs2(pssum[k, j] - v) - (pssqsum[k, j] - abs2(v))
+            end
+        end
     else
-        error("Invalid method $method")
+        jnval = zeros(T, 0, 0)
+    end
+    (tval, jnval)
+end
+
+jnvar(jnval, dim) = var(jnval, dim)*(size(jnval, dim) - 1)/sqrt(size(jnval, dim))
+
+# Computes the PLV
+pfplv{T<:Real}(sts::Array{Complex{T},3}) =
+    amean(scale!(phasesum(sts), 1.0/size(sts, 3)), 2)
+
+# Computes the PPC0 statistic from Vinck et al. (2012), which assumes
+# that the LFPs surrounding all spikes are independent
+pfppc0{T<:Real}(sts::Array{Complex{T}, 3}) =
+    (abs2(phasesum(sts)) - size(sts, 3))/(size(sts, 3)*(size(sts, 3) - 1))
+
+# Computes the PPC1 statistic from Vinck et al. (2012), which accounts
+# for statistical dependence of spike-LFP phases within a trial
+function pfppc1{T<:Real, U<:Integer}(sts::Array{Complex{T}, 3}, trials::AbstractVector{U};
+                                     estimatevar::Bool=false)
+    pstrial, nintrial = phasesumtrial(sts, trials)
+    tval, jnval = pfdiffsq(pstrial, estimatevar)
+
+    nintrial2sum = sqsum(nintrial, estimatevar)
+    scale!(tval, 1.0/(size(pmtrial, 2) * (abs2(size(sts, 3)) - nintrial2sum)))
+
+    if estimatevar
+        scale!(jnval, 1.0/(size(pmtrial, 2) * (abs2(size(sts, 3) - nintrial) -
+                                               (nintrial2sum - abs2(nintrial)))))
+        (tval, jnvar(jnval, 2))
+    else
+        tval
+    end
+end
+
+# Computes the PPC2 statistic from Vinck et al. (2012), which accounts
+# for statistical dependence of spike-LFP phases within a trial as well
+# as dependence between spike count and phase
+function pfppc2{T<:Real, U<:Integer}(sts::Array{Complex{T}, 3}, trials::AbstractVector{U};
+                                     estimatevar::Bool=false)
+    pmtrial, nintrial = phasesumtrial(sts, trials)
+    @inbounds begin
+        for i = 1:size(pmtrial, 3)
+            @assert nintrial[i] != 0
+            m = 1.0/nintrial[i]
+            for j = 1:size(pmtrial, 2), k = 1:size(pmtrial, 1)
+                pmtrial[k, j, i] *= m
+            end
+        end
+    end
+
+    tval, jnval = pfdiffsq(pmtrial, estimatevar)
+    scale!(tval, 1.0/(size(pmtrial, 2) * size(pmtrial, 3) * (size(pmtrial, 3) - 1)))
+
+    if estimatevar
+        scale!(jnval, 1.0/(size(pmtrial, 2) * (size(pmtrial, 3) - 1) * (size(pmtrial, 3) - 2)))
+        (tval, jnvar(jnval, 2))
+    else
+        tval
     end
 end
 
