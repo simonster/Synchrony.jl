@@ -49,6 +49,6 @@ for i = 1:size(signal, 3)
 end
 c = multitaper([signal signal], Coherence(), nfft=64)
 @test_approx_eq c 1
-t = multitaper([signal signal[:, :, circshift([1:size(s2, 3)], 1)]], Coherence(), nfft=64)
+t = multitaper([signal signal[:, :, circshift([1:size(signal, 3)], 1)]], Coherence(), nfft=64)
 sp = multitaper([signal signal], ShiftPredictor(Coherence()), nfft=64)
 @test_approx_eq t sp
