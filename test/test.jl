@@ -1,5 +1,10 @@
 using FrequencyDomainAnalysis, Base.Test
 
+# Test Morlet wavelet bases
+d1 = convert(Array{Float64}, wavebases(MorletWavelet([0.1], 5), 1024))
+d2 = readdlm("morlet_bases_f_0.1_k0_5.txt")
+@test_approx_eq d1 d2
+
 # Test dpss against dpss computed with MATLAB
 d1 = dpss(128, 4)
 d2 = readdlm("dpss128,4.txt", '\t')
