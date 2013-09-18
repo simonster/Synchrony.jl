@@ -22,28 +22,28 @@ export MorletWavelet, wavebases, wavecoi, ContinuousWaveletTransform, cwt
 
 #
 # Mother wavelets, which are convolved with the signal in frequency space
-#
+# 
 abstract MotherWavelet{T}
 
 immutable MorletWavelet{T} <: MotherWavelet{T}
+    freq::Vector{T}
     k0::T
-    foi::Vector{T}
     fourierfactor::T
 end
-MorletWavelet{T<:Real}(foi::Vector{T}, k0::Real=5.0) =
-    MorletWavelet(convert(T, k0), foi, convert(T, (4pi)/(k0 + sqrt(2 + k0^2))))
+MorletWavelet{T<:Real}(freq::Vector{T}, k0::Real=5.0) =
+    MorletWavelet(freq, convert(T, k0), convert(T, (4pi)/(k0 + sqrt(2 + k0^2))))
 
 function wavebases{T}(w::MorletWavelet{T}, n::Int, fs::Real=1)
     df = 2pi * fs / n
-    normconst = df / sqrt(pi) * n
+    normconst = sqrt(df) / sqrt(sqrt(pi) * n)
     k0 = w.k0
 
-    bases = Array(T, div(n, 2)+1, length(w.foi))
+    bases = Array(T, div(n, 2)+1, length(w.freq))
     @inbounds begin
-        for k = 1:length(w.foi)
-            scale = 1/(w.foi[k] * w.fourierfactor)
+        for k = 1:length(w.freq)
+            scale = 1/(w.freq[k] * w.fourierfactor)
             bases[1, k] = zero(T)
-            norm = sqrt(scale * normconst)
+            norm = sqrt(scale) * normconst
             for j = 2:size(bases, 1)
                 bases[j, k] = norm * exp(-abs2(scale * df * (j-1) - k0)*0.5)
             end
@@ -53,7 +53,7 @@ function wavebases{T}(w::MorletWavelet{T}, n::Int, fs::Real=1)
 end
 
 function wavecoi{T}(w::MorletWavelet{T}, fs::Real=1)
-    [sqrt(2) * fs / (f * w.fourierfactor) for f in w.foi]
+    [sqrt(2) * fs / (f * w.fourierfactor) for f in w.freq]
 end
 
 immutable ContinuousWaveletTransform{T,S}
@@ -127,10 +127,8 @@ function evaluate!{T,S<:FloatingPoint}(out::Array{Complex{S}, 2}, t::ContinuousW
             # Perform FFT
             FFTW.execute(T, t.p2.plan)
 
-            # Copy to output array and divide by normalization factor
-            for i = 1:nsignal
-                out[i, k] = ifftwork[i] * normalization
-            end
+            # Copy to output array
+            copy!(pointer(out, nsignal*(k-1)+1), pointer(ifftwork), nsignal)
 
             # Set NaNs at edges
             coi_length = iceil(t.coi[k])

@@ -56,16 +56,20 @@ sp = multitaper([signal signal], ShiftPredictor(Coherence()))
 @test_approx_eq t sp
 
 # Test Morlet wavelet bases
-d1 = [convert(Array{Float64}, wavebases(MorletWavelet([0.1], 5), 1024)); zeros(511, 1)]
+#
+# Reference implementation is from Torrence, C., and G. P. Compo. “A
+# Practical Guide to Wavelet Analysis.” Bulletin of the American
+# Meteorological Society 79, no. 1 (1998): 61–78.
+#
+# Our bases differ from Torrence and Compo's by a factor corresponding
+# to the length of the FFT, which eliminates the need to normalize
+# the output of the inverse FFT.
+d1 = [wavebases(MorletWavelet([0.1], 5), 1024) * 1024; zeros(511, 1)]
 d2 = readdlm(joinpath(testdir, "morlet_bases_f_0.1_k0_5.txt"))
 @test_approx_eq d1 d2
 
 # Test Morlet wavelet by comparing output for a 0.1 Hz oscillation
 # embedded in white noise
-#
-# Reference implementation is from Torrence, C., and G. P. Compo. “A
-# Practical Guide to Wavelet Analysis.” Bulletin of the American
-# Meteorological Society 79, no. 1 (1998): 61–78.
 test_in = readdlm(joinpath(testdir, "wavelet_test_in.txt"))[:]
 foi = readdlm(joinpath(testdir, "wavelet_test_foi.txt"))[:]
 d1 = cwt(test_in - mean(test_in), MorletWavelet(foi, 5))
