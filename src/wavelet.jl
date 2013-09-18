@@ -106,8 +106,6 @@ function evaluate!{T,S<:FloatingPoint}(out::Array{Complex{S}, 2}, t::ContinuousW
         # Perform FFT of padded signal
         FFTW.execute(T, t.p1.plan)
 
-        normalization = 1/nfft
-
         for k = 1:size(bases, 2)
             # Multiply by wavelet
             for j = 1:nrfft
