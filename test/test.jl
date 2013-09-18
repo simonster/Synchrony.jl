@@ -13,7 +13,7 @@ input = cell(2)
 output = cell(2)
 for i = 1:2
 	input[i] = readdlm(joinpath(testdir, "psd_test$(i)_in.txt"), '\t')[:]
-	output[i] = psd(input[i], fs=1000)[:]
+	output[i] = psd(input[i], 1000)[:]
 	truth = readdlm(joinpath(testdir, "psd_test$(i)_out.txt"), '\t')
 	@test_approx_eq output[i] truth
 end
@@ -23,20 +23,20 @@ in1 = hcat(input...)
 out1 = hcat(output...)
 in2 = hcat(flipud(input)...)
 out2 = hcat(flipud(output)...)
-@test_approx_eq psd(in1, fs=1000) out1
-@test_approx_eq psd(in2, fs=1000) out2
+@test_approx_eq psd(in1, 1000) out1
+@test_approx_eq psd(in2, 1000) out2
 
 # Test cross-spectrum
-sXY1 = xspec(input[1], input[2]; fs=1000)
-sXY2 = xspec(input[2], input[1]; fs=1000)
+sXY1 = xspec(input[1], input[2], 1000)
+sXY2 = xspec(input[2], input[1], 1000)
 @test_approx_eq sXY1 conj(sXY2)
-c = coherence(input[1], input[2], fs=1000)
+c = coherence(input[1], input[2], 1000)
 truth = readdlm(joinpath(testdir, "coherence_mag.txt"), '\t')
 @test_approx_eq c truth
 
 # Test multiple channel functionality
 in3 = hcat(input[1], input[2])
-(xs, s, c2) = multitaper(in3, (CrossSpectrum(), PowerSpectrum(), Coherency()), fs=1000)
+(xs, s, c2) = multitaper(in3, (CrossSpectrum(), PowerSpectrum(), Coherency()), 1000)
 @test_approx_eq s out1
 @test_approx_eq xs sXY1
 truth = readdlm(joinpath(testdir, "coherence_phi.txt"), '\t')[2:end-1]
@@ -49,10 +49,10 @@ signal = zeros(length(x), 1, 35)
 for i = 1:size(signal, 3)
 	signal[:, i] = cos(0.2pi*x+rand()*2pi)
 end
-c = multitaper([signal signal], Coherence(), nfft=64)
+c = multitaper([signal signal], Coherence())
 @test_approx_eq c 1
-t = multitaper([signal signal[:, :, circshift([1:size(signal, 3)], 1)]], Coherence(), nfft=64)
-sp = multitaper([signal signal], ShiftPredictor(Coherence()), nfft=64)
+t = multitaper([signal signal[:, :, circshift([1:size(signal, 3)], 1)]], Coherence())
+sp = multitaper([signal signal], ShiftPredictor(Coherence()))
 @test_approx_eq t sp
 
 # Test Morlet wavelet bases
