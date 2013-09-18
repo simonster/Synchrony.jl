@@ -65,7 +65,6 @@ immutable ContinuousWaveletTransform{T,S}
 end
 
 function ContinuousWaveletTransform{T}(w::MotherWavelet{T}, nfft::Int, fs::Real=1)
-    println(nfft)
     fftin = Array(T, nfft)
     fftout = zeros(Complex{T}, div(nfft, 2)+1)
     ifftwork = zeros(Complex{T}, nfft)
