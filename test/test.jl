@@ -66,13 +66,18 @@ d2 = readdlm(joinpath(testdir, "morlet_bases_f_0.1_k0_5.txt"))
 # Reference implementation is from Torrence, C., and G. P. Compo. “A
 # Practical Guide to Wavelet Analysis.” Bulletin of the American
 # Meteorological Society 79, no. 1 (1998): 61–78.
-test_in = readdlm(joinpath(testdir, "wavelet_test_in.txt"), '\t')[:]
-foi = readdlm(joinpath(testdir, "wavelet_test_foi.txt"), '\t')[:]
+test_in = readdlm(joinpath(testdir, "wavelet_test_in.txt"))[:]
+foi = readdlm(joinpath(testdir, "wavelet_test_foi.txt"))[:]
 d1 = cwt(test_in - mean(test_in), MorletWavelet(foi, 5))
 d2 = complex(readdlm(joinpath(testdir, "wavelet_test_out_re.txt"), '\t'), readdlm(joinpath(testdir, "wavelet_test_out_im.txt"), '\t'))
-nans = isnan(real(d1))
-@test !all(nans)
-d2[nans] = NaN
+coi_periods = readdlm(joinpath(testdir, "wavelet_test_coi.txt"))[:]
+for j = 1:length(foi)
+	period = 1/foi[j]
+	for i = 1:length(coi_periods)
+		@test isnan(real(d1[i, j])) == (1/foi[j] > coi_periods[i])
+	end
+end
+d2[isnan(real(d1))] = NaN
 @test_approx_eq d1 d2
 
 # TODO PLV, PPC, PLI, PLI2Unbiased, WPLI, WPLI2Debiased,
