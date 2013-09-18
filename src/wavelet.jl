@@ -92,6 +92,8 @@ function evaluate!{T}(out::Array{Complex{T}, 2}, t::ContinuousWaveletTransform{T
 
         # Get indices of discarded samples
         discard_samples = isnan(signal)
+        discard_samples[1] = false
+        discard_samples[end] = false
         discard_sample_indices = find(discard_samples)
 
         # Copy original data, set discarded samples to zero

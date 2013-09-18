@@ -80,6 +80,18 @@ end
 d2[isnan(real(d1))] = NaN
 @test_approx_eq d1 d2
 
+# Test missing data handling in wavelet transform
+y = ones(1000)
+y[500] = NaN
+foi = 2.^(0:0.25:7)
+w = MorletWavelet(foi, 5)
+cois = iceil(wavecoi(w, 1000))
+z = cwt(y, w, 1000)
+for k = 1:length(foi), i = 1:length(y)
+	@test isnan(real(z[i, k])) == (i <= cois[k] || i >= length(y) - cois[k] + 1 ||
+		                           500 - cois[k] <= i <= 500 + cois[k])
+end
+
 # TODO PLV, PPC, PLI, PLI2Unbiased, WPLI, WPLI2Debiased,
 #      spiketriggeredspectrum, pfcoherence, pfplv, pfppc0, pfppc1,
 #      pfppc2
