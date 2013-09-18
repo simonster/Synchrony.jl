@@ -2,11 +2,6 @@ using FrequencyDomainAnalysis, Base.Test
 
 const testdir = joinpath(Pkg.dir("FrequencyDomainAnalysis"), "test")
 
-# Test Morlet wavelet bases
-d1 = convert(Array{Float64}, wavebases(MorletWavelet([0.1], 5), 1024))
-d2 = readdlm(joinpath(testdir, "morlet_bases_f_0.1_k0_5.txt"))
-@test_approx_eq d1 d2
-
 # Test dpss against dpss computed with MATLAB
 d1 = dpss(128, 4)
 d2 = readdlm(joinpath(testdir, "dpss128,4.txt"), '\t')
@@ -59,6 +54,26 @@ c = multitaper([signal signal], Coherence(), nfft=64)
 t = multitaper([signal signal[:, :, circshift([1:size(signal, 3)], 1)]], Coherence(), nfft=64)
 sp = multitaper([signal signal], ShiftPredictor(Coherence()), nfft=64)
 @test_approx_eq t sp
+
+# Test Morlet wavelet bases
+d1 = [convert(Array{Float64}, wavebases(MorletWavelet([0.1], 5), 1024)); zeros(511, 1)]
+d2 = readdlm(joinpath(testdir, "morlet_bases_f_0.1_k0_5.txt"))
+@test_approx_eq d1 d2
+
+# Test Morlet wavelet by comparing output for a 0.1 Hz oscillation
+# embedded in white noise
+#
+# Reference implementation is from Torrence, C., and G. P. Compo. “A
+# Practical Guide to Wavelet Analysis.” Bulletin of the American
+# Meteorological Society 79, no. 1 (1998): 61–78.
+test_in = readdlm(joinpath(testdir, "wavelet_test_in.txt"), '\t')[:]
+foi = readdlm(joinpath(testdir, "wavelet_test_foi.txt"), '\t')[:]
+d1 = cwt(test_in - mean(test_in), MorletWavelet(foi, 5))
+d2 = complex(readdlm(joinpath(testdir, "wavelet_test_out_re.txt"), '\t'), readdlm(joinpath(testdir, "wavelet_test_out_im.txt"), '\t'))
+nans = isnan(real(d1))
+@test !all(nans)
+d2[nans] = NaN
+@test_approx_eq d1 d2
 
 # TODO PLV, PPC, PLI, PLI2Unbiased, WPLI, WPLI2Debiased,
 #      spiketriggeredspectrum, pfcoherence, pfplv, pfppc0, pfppc1,
