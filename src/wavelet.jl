@@ -39,12 +39,14 @@ function wavebases{T}(w::MorletWavelet{T}, n::Int, fs::Real=1)
     k0 = w.k0
 
     bases = Array(T, div(n, 2)+1, length(w.foi))
-    for k = 1:length(w.foi)
-        scale = 1/(w.foi[k] * w.fourierfactor)
-        bases[1, k] = zero(T)
-        norm = sqrt(scale * normconst)
-        for j = 2:size(bases, 1)
-            bases[j, k] = norm * exp(-abs2(scale * df * (j-1) - k0)*0.5)
+    @inbounds begin
+        for k = 1:length(w.foi)
+            scale = 1/(w.foi[k] * w.fourierfactor)
+            bases[1, k] = zero(T)
+            norm = sqrt(scale * normconst)
+            for j = 2:size(bases, 1)
+                bases[j, k] = norm * exp(-abs2(scale * df * (j-1) - k0)*0.5)
+            end
         end
     end
     bases
@@ -75,7 +77,7 @@ function ContinuousWaveletTransform{T}(w::MotherWavelet{T}, nfft::Int, fs::Real=
     ContinuousWaveletTransform(fftin, fftout, ifftwork, bases, coi, p1, p2)
 end
 
-function evaluate!{T}(out::Array{Complex{T}, 2}, t::ContinuousWaveletTransform{T}, signal::Vector{T})
+function evaluate!{T,S<:FloatingPoint}(out::Array{Complex{S}, 2}, t::ContinuousWaveletTransform{T}, signal::Vector{T})
     @inbounds begin
         fftin = t.fftin
         fftout = t.fftout
@@ -99,12 +101,12 @@ function evaluate!{T}(out::Array{Complex{T}, 2}, t::ContinuousWaveletTransform{T
         # Copy original data, set discarded samples to zero
         copy!(fftin, signal)
         fftin[discard_sample_indices] = 0
-        for j = length(signal)+1:nfft
-            fftin[j] = 0
-        end
+        fftin[length(signal)+1:nfft] = zero(T)
 
         # Perform FFT of padded signal
         FFTW.execute(T, t.p1.plan)
+
+        normalization = 1/nfft
 
         for k = 1:size(bases, 2)
             # Multiply by wavelet
@@ -120,16 +122,14 @@ function evaluate!{T}(out::Array{Complex{T}, 2}, t::ContinuousWaveletTransform{T
             end
 
             # Zero remaining frequencies
-            for j = size(bases, 1)+1:nfft
-                ifftwork[j] = 0
-            end
+            ifftwork[size(bases, 1)+1:nfft] = zero(Complex{T})
 
             # Perform FFT
             FFTW.execute(T, t.p2.plan)
 
             # Copy to output array and divide by normalization factor
             for i = 1:nsignal
-                out[i, k] = ifftwork[i]/nfft
+                out[i, k] = ifftwork[i] * normalization
             end
 
             # Set NaNs at edges
