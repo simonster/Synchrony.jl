@@ -17,7 +17,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-export spiketriggeredspectrum, pfcoherence, pfplv, pfppc0, pfppc1, pfppc2
+export spiketriggeredspectrum, pfcoherence, pfplv, pfppc0, pfppc1, pfppc2, pxcorr
 
 #
 # Perform tapered FFT of individual spikes embedded in a continuous signal
@@ -253,4 +253,27 @@ function pfppc2{T<:Real, U<:Integer}(sts::Array{Complex{T}, 3}, trials::Abstract
     else
         tval
     end
+end
+
+# Binned cross-correlation of event times
+# x and y are monotonically increasing vectors of event times, bins is
+# a monotonically increasing vector that specifies time bins for the
+# cross-correlation function
+function pxcorr(x::AbstractVector, y::AbstractVector, bins::AbstractVector)
+    counts = zeros(Int, length(bins-1))
+    ny = length(y)
+    minbin = min(bins)
+    maxbin = max(bins)
+    nbins = length(bins)
+    for xspk in x
+        ylo = searchsortedfirst(y, xspk+minbin, Base.Sort.Forward)
+        ylo <= ny || continue
+        yhi = searchsortedlast(y, xspk+maxbin, ylo, ny, Base.Sort.Forward)
+        lastbin = 1
+        for i = ylo:yhi
+            yspkdiff = xspk - y[i]
+            counts[searchsortedfirst(bins, yspkdiff)] += 1
+        end
+    end
+    counts
 end

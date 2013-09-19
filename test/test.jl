@@ -96,6 +96,11 @@ for k = 1:length(foi), i = 1:length(y)
 		                           500 - cois[k] <= i <= 500 + cois[k])
 end
 
+# Test pxcorr
+x = [rand() > 0.5 for i = 1:50]
+y = [rand() > 0.5 for i = 1:50]
+@test_approx_eq xcorr(x, y) pxcorr(x, y, -49:49)
+
 # TODO PLV, PPC, PLI, PLI2Unbiased, WPLI, WPLI2Debiased,
 #      spiketriggeredspectrum, pfcoherence, pfplv, pfppc0, pfppc1,
 #      pfppc2
