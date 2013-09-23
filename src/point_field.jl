@@ -260,19 +260,21 @@ end
 # a monotonically increasing vector that specifies time bins for the
 # cross-correlation function
 function pxcorr(x::AbstractVector, y::AbstractVector, bins::AbstractVector)
-    counts = zeros(Int, length(bins-1))
-    ny = length(y)
+    counts = zeros(Int, length(bins))
+    nx = length(x)
     minbin = min(bins)
     maxbin = max(bins)
     nbins = length(bins)
-    for xspk in x
-        ylo = searchsortedfirst(y, xspk+minbin, Base.Sort.Forward)
-        ylo <= ny || continue
-        yhi = searchsortedlast(y, xspk+maxbin, ylo, ny, Base.Sort.Forward)
-        lastbin = 1
-        for i = ylo:yhi
-            yspkdiff = xspk - y[i]
-            counts[searchsortedfirst(bins, yspkdiff)] += 1
+    for yspk in y
+        xlo = searchsortedfirst(x, yspk+minbin, Base.Sort.Forward)
+        xhi = searchsortedlast(x, yspk+maxbin, xlo, nx, Base.Sort.Forward)
+        xlo = xlo < 1 ? 1 : xlo
+        xhi = xhi > nx ? nx : xhi
+        for i = xlo:xhi
+            yspkdiff = x[i] - yspk
+            bin = searchsortedfirst(bins, yspkdiff)
+            bin = bin > nbins ? nbins : bin
+            counts[bin] += 1
         end
     end
     counts

@@ -99,7 +99,7 @@ end
 # Test pxcorr
 x = [rand() > 0.5 for i = 1:50]
 y = [rand() > 0.5 for i = 1:50]
-@test_approx_eq xcorr(x, y) pxcorr(x, y, -49:49)
+@test_approx_eq xcorr(x, y) pxcorr(find(x), find(y), -49:49)
 
 # TODO PLV, PPC, PLI, PLI2Unbiased, WPLI, WPLI2Debiased,
 #      spiketriggeredspectrum, pfcoherence, pfplv, pfppc0, pfppc1,
