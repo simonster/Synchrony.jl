@@ -18,7 +18,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 export PowerSpectrum, PowerSpectrumVariance, CrossSpectrum, Coherence, Coherency, PLV, PPC, PLI,
-       PLI2Unbiased, WPLI, WPLI2Debiased, ShiftPredictor, allpairs
+       PLI2Unbiased, WPLI, WPLI2Debiased, ShiftPredictor, allpairs, applystat
 
 # Get all pairs of channels
 function allpairs(n)
@@ -416,3 +416,27 @@ function finish(s::ShiftPredictor)
     end
     finish(s.stat)
 end
+
+#
+# Apply transform statistic to transformed data
+#
+# Data is
+# frequencies x channels x trials or
+# frequencies x channels x ntapers x trials or
+# frequencies x time x channels x ntapers x trials
+function applystat{T<:Real}(s::TransformStatistic{T}, data::Array{Complex{T},4})
+    init(s, size(data, 1), size(data, 2), size(data, 3))
+    offset = size(data, 1)*size(data, 2)
+    for j = 1:size(data, 4), itaper = 1:size(data, 3)
+            accumulate(s, pointer_to_array(pointer(data,
+                                                   offset*((itaper-1)+size(data, 3)*(j-1))+1),
+                                           (size(data, 1), size(data, 2))), itaper)
+    end
+    finish(s)
+end
+applystat{T<:Complex}(s::TransformStatistic{T}, data::Array{Complex{T},3}) =
+    applystat(s, reshape(data, size(data, 1), size(data, 2), 1, size(data, 3)))
+applystat{T<:Complex}(s::TransformStatistic{T}, data::Array{Complex{T},5}) =
+    reshape(applystat(s, reshape(data, size(data, 1)*size(data, 2), size(data, 3),
+                                 size(data, 4), size(data, 5))),
+            size(data, 1), size(data, 2), size(data, 3), size(data, 4), size(data, 5))

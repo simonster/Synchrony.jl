@@ -173,6 +173,6 @@ end
 
 # Friendly interface to ContinuousWaveletTransform
 function cwt{T <: Real}(signal::Vector{T}, w::MotherWavelet, fs::Real=1)
-    t = ContinuousWaveletTransform(w, nextprod([2, 3, 5, 7], length(signal)), fs)
+    t = ContinuousWaveletTransform(w, nextfastfft(length(signal)), fs)
     evaluate!(Array(Complex{T}, length(signal), size(t.bases, 2)), t, signal)
 end

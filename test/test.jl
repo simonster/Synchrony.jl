@@ -13,7 +13,7 @@ input = cell(2)
 output = cell(2)
 for i = 1:2
 	input[i] = readdlm(joinpath(testdir, "psd_test$(i)_in.txt"), '\t')[:]
-	output[i] = psd(input[i], 1000)[:]
+	output[i] = psd(input[i], 1000, nfft=512)[:]
 	truth = readdlm(joinpath(testdir, "psd_test$(i)_out.txt"), '\t')
 	@test_approx_eq output[i] truth
 end
@@ -23,25 +23,29 @@ in1 = hcat(input...)
 out1 = hcat(output...)
 in2 = hcat(flipud(input)...)
 out2 = hcat(flipud(output)...)
-@test_approx_eq psd(in1, 1000) out1
-@test_approx_eq psd(in2, 1000) out2
+@test_approx_eq psd(in1, 1000, nfft=512) out1
+@test_approx_eq psd(in2, 1000, nfft=512) out2
 
 # Test cross-spectrum
-sXY1 = xspec(input[1], input[2], 1000)
-sXY2 = xspec(input[2], input[1], 1000)
+sXY1 = xspec(input[1], input[2], 1000, nfft=512)
+sXY2 = xspec(input[2], input[1], 1000, nfft=512)
 @test_approx_eq sXY1 conj(sXY2)
-c = coherence(input[1], input[2], 1000)
+c = coherence(input[1], input[2], 1000, nfft=512)
 truth = readdlm(joinpath(testdir, "coherence_mag.txt"), '\t')
 @test_approx_eq c truth
 
 # Test multiple channel functionality
-in3 = hcat(input[1], input[2])
-(xs, s, c2) = multitaper(in3, (CrossSpectrum(), PowerSpectrum(), Coherency()), 1000)
+(xs, s, c2) = multitaper(in1, (CrossSpectrum(), PowerSpectrum(), Coherency()), 1000, nfft=512)
 @test_approx_eq s out1
 @test_approx_eq xs sXY1
 truth = readdlm(joinpath(testdir, "coherence_phi.txt"), '\t')[2:end-1]
 @test_approx_eq abs(c2) c
 @test_approx_eq angle(c2[2:end-1]) truth
+
+# Test mtfft and applystat
+@test_approx_eq applystat(PowerSpectrum(), mtfft(in1, 1000, nfft=512)) out1
+@test_approx_eq applystat(CrossSpectrum(), mtfft(in1, 1000, nfft=512)) sXY1
+@test_approx_eq applystat(Coherence(), mtfft(in1, 1000, nfft=512)) c
 
 # Test shift predictor
 x = 0:63

@@ -17,14 +17,14 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-export multitaper, psd, xspec, coherence
+export multitaper, psd, xspec, coherence, mtfft
 
-# Perform tapered FFT of continuous signals
+# Apply a statistic to tapered FFT of continuous signals
 # A is samples x channels x trials
 function multitaper{T<:Real}(A::Union(AbstractVector{T}, AbstractMatrix{T}, AbstractArray{T,3}),
                              stats::(TransformStatistic, TransformStatistic...), fs::Real=1;
-                             tapers::Union(Vector, Matrix)=dpss(size(A, 1), 4), nfft::Int=nextpow2(size(A, 1)),
-                             freqrange::Range1{Int}=0:-1)
+                             tapers::Union(Vector, Matrix)=dpss(size(A, 1), 4),
+                             nfft::Int=nextfastfft(size(A, 1)), freqrange::Range1{Int}=0:-1)
     # We can't guarantee order of kwargs, so this has to be here
     if freqrange == 0:-1
         freqrange = 1:(nfft >> 1 + 1)
@@ -81,6 +81,45 @@ function multitaper{T<:Real}(A::Union(AbstractVector{T}, AbstractMatrix{T}, Abst
     end
 
     [finish(stat) for stat in stats]
+end
+
+# Perform tapered FFT of continuous signals, returning all of the tapered FFTs
+# A is samples x channels x trials
+# output is frequencies x channels x tapers x trials
+function mtfft{T<:Real}(A::Union(AbstractVector{T}, AbstractMatrix{T}, AbstractArray{T,3}), fs::Real=1;
+                        tapers::Union(Vector, Matrix)=dpss(size(A, 1), 4),
+                        nfft::Int=nextfastfft(size(A, 1)))
+    n = size(A, 1)
+    nout = nfft >> 1 + 1
+    ntapers = size(tapers, 2)
+    nchannels = size(A, 2)
+
+    multiplier = convert(T, sqrt(2/fs))
+    firstsamplemultiplier = convert(T, sqrt(1/fs))
+
+    dtype = outputtype(T)
+    fftin = zeros(dtype, nfft, nchannels)
+    fftout = Array(Complex{dtype}, nout, nchannels, ntapers, size(A, 3))
+
+    p = FFTW.Plan(fftin, fftout, 1, FFTW.ESTIMATE, FFTW.NO_TIMELIMIT)
+    for j = 1:size(A, 3), i = 1:ntapers
+        @inbounds for k = 1:nchannels, l = 1:n
+            fftin[l, k] = A[l, k, j]*tapers[l, i]
+        end
+
+        iout = pointer_to_array(pointer(fftout, nout*nchannels*((i-1)+ntapers*(j-1))+1), (nout, nchannels))
+        FFTW.execute(p.plan, fftin, iout)
+
+        # Copy FFT from one buffer to another. See note above.
+        @inbounds for k = 1:nchannels
+            iout[1, k] *= firstsamplemultiplier
+            for l = 2:nout-1
+                iout[l, k] *= multiplier
+            end
+            iout[nout, k] *= firstsamplemultiplier
+        end
+    end
+    fftout
 end
 
 # Calling with a single type or instance
