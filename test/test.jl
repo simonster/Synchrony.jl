@@ -55,6 +55,40 @@ t = multitaper([signal signal[:, :, circshift([1:size(signal, 3)], 1)]], Coheren
 sp = multitaper([signal signal], ShiftPredictor(Coherence()))
 @test_approx_eq t sp
 
+# Test PLV and PPC
+angles = [
+	2.439564585801219,
+	3.0190627944596296,
+	1.9558533611578697,
+	2.9276497655265747,
+	-2.668278147116921,
+	2.9670038532462017,
+	-2.489899551868197,
+	-2.7098277543134612,
+	-2.0699115143373175,
+	-1.6574845096744018,
+	-1.7483177390187856,
+	3.0954095279265252,
+	2.8604385096072225,
+	-3.04237881355147,
+	2.6904076043411562
+]
+true_plv = abs(mean(exp(im*angles)))
+true_ppc = 1-var(exp(im*angles)) # yep.
+
+period = 32
+nperiods = 16
+band = nperiods + 1
+x = 0:2*pi/period:2*pi*nperiods-2*pi/period
+signal1 = repeat(cos(x), inner=[1, 1, length(angles)])
+signal2 = cat(3, [cos(x + a) for a in angles]...)
+
+coh, plv, ppc = multitaper([signal1 signal2], (Coherence(), PLV(), PPC()), tapers=ones(period*nperiods))
+
+@test_approx_eq coh[band] true_plv
+@test_approx_eq plv[band] true_plv
+@test_approx_eq ppc[band] true_ppc
+
 # Test Morlet wavelet bases
 #
 # Reference implementation is from Torrence, C., and G. P. Compo. “A
@@ -101,6 +135,6 @@ x = [rand() > 0.5 for i = 1:50]
 y = [rand() > 0.5 for i = 1:50]
 @test_approx_eq xcorr(x, y) pxcorr(find(x), find(y), -49:49)
 
-# TODO PLV, PPC, PLI, PLI2Unbiased, WPLI, WPLI2Debiased,
+# TODO PLI, PLI2Unbiased, WPLI, WPLI2Debiased,
 #      spiketriggeredspectrum, pfcoherence, pfplv, pfppc0, pfppc1,
 #      pfppc2
