@@ -92,16 +92,39 @@ function evaluate!{T,S<:FloatingPoint}(out::Array{Complex{S}, 2}, t::ContinuousW
         size(out, 1) == length(signal) || error("first dimension of out must match length of signal")
         size(out, 2) == size(bases, 2) || error("second dimension of out must match number of wavelets")
 
-        # Get indices of discarded samples
-        discard_samples = isnan(signal)
+        copy!(fftin, signal)
+
+        # Interpolate NaN values in input and save their indices to
+        # set output to NaN later
+        discard_samples = falses(length(signal))
+        oldv = zero(eltype(fftin))
+        i = 1
+        while i <= nsignal
+            v = fftin[i]
+            if isnan(v)
+                nanstart = i
+
+                i += 1
+                while i <= nsignal && isnan(fftin[i])
+                    i += 1
+                end
+
+                nanlen = (i - nanstart)
+                st = i > nsignal ? zero(eltype(fftin)) : (fftin[i] - oldv)/(nanlen+1)
+                for j = 1:nanlen
+                    fftin[nanstart+j-1] = oldv+st*j
+                end
+                discard_samples[nanstart:i-1] = true
+            else
+                oldv = v
+                i += 1
+            end
+        end
+        fftin[nsignal+1:nfft] = zero(T)
+        # This simplifies replacement with NaN below
         discard_samples[1] = false
         discard_samples[end] = false
         discard_sample_indices = find(discard_samples)
-
-        # Copy original data, set discarded samples to zero
-        copy!(fftin, signal)
-        fftin[discard_sample_indices] = 0
-        fftin[length(signal)+1:nfft] = zero(T)
 
         # Perform FFT of padded signal
         FFTW.execute(T, t.p1.plan)
