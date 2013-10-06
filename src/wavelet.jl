@@ -33,6 +33,7 @@ end
 MorletWavelet{T<:Real}(freq::Vector{T}, k0::Real=5.0) =
     MorletWavelet(freq, convert(T, k0), convert(T, (4pi)/(k0 + sqrt(2 + k0^2))))
 
+# Generate daughter wavelet (samples x frequencies)
 function wavebases{T}(w::MorletWavelet{T}, n::Int, fs::Real=1)
     df = 2pi * fs / n
     normconst = sqrt(df) / sqrt(sqrt(pi) * n)
@@ -42,9 +43,8 @@ function wavebases{T}(w::MorletWavelet{T}, n::Int, fs::Real=1)
     @inbounds begin
         for k = 1:length(w.freq)
             scale = 1/(w.freq[k] * w.fourierfactor)
-            bases[1, k] = zero(T)
             norm = sqrt(scale) * normconst
-            for j = 2:size(bases, 1)
+            for j = 1:size(bases, 1)
                 bases[j, k] = norm * exp(-abs2(scale * df * (j-1) - k0)*0.5)
             end
         end

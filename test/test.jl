@@ -99,6 +99,9 @@ coh, plv, ppc = multitaper([signal1 signal2], (Coherence(), PLV(), PPC()), taper
 # to the length of the FFT, which eliminates the need to normalize
 # the output of the inverse FFT.
 d1 = [wavebases(MorletWavelet([0.1], 5), 1024) * 1024; zeros(511, 1)]
+d1[1, :] = 0 # Torrence and Compo don't use the zero frequency
+             # component because they subtract the signal mean in the
+             # time domain.
 d2 = readdlm(joinpath(testdir, "morlet_bases_f_0.1_k0_5.txt"))
 @test_approx_eq d1 d2
 
