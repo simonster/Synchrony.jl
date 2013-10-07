@@ -434,9 +434,10 @@ function applystat{T<:Real}(s::TransformStatistic{T}, data::Array{Complex{T},4})
     end
     finish(s)
 end
-applystat{T<:Complex}(s::TransformStatistic{T}, data::Array{Complex{T},3}) =
+applystat{T<:Real}(s::TransformStatistic{T}, data::Array{Complex{T},3}) =
     applystat(s, reshape(data, size(data, 1), size(data, 2), 1, size(data, 3)))
-applystat{T<:Complex}(s::TransformStatistic{T}, data::Array{Complex{T},5}) =
-    reshape(applystat(s, reshape(data, size(data, 1)*size(data, 2), size(data, 3),
-                                 size(data, 4), size(data, 5))),
-            size(data, 1), size(data, 2), size(data, 3), size(data, 4), size(data, 5))
+function applystat{T<:Real}(s::TransformStatistic{T}, data::Array{Complex{T},5})
+    out = applystat(s, reshape(data, size(data, 1)*size(data, 2), size(data, 3),
+                               size(data, 4), size(data, 5)));
+    reshape(out, size(data, 1), size(data, 2), size(out, 2))
+end
