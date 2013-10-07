@@ -18,7 +18,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 export PowerSpectrum, PowerSpectrumVariance, CrossSpectrum, Coherence, Coherency, PLV, PPC, PLI,
-       PLI2Unbiased, WPLI, WPLI2Debiased, ShiftPredictor, allpairs, applystat
+       PLI2Unbiased, WPLI, WPLI2Debiased, ShiftPredictor, Jackknife, allpairs, applystat
 
 # Get all pairs of channels
 function allpairs(n)
@@ -44,8 +44,7 @@ macro pairwisestat(name, xtype)
         type $name{T<:Real} <: PairwiseTransformStatistic{T}
             pairs::Array{Int, 2}
             x::$xtype
-            nepochs::Vector{Int}
-            tmp::BitVector
+            n::Matrix{Int32}
             $name() = new()
             $name(pairs::Array{Int, 2}) = new(pairs)
         end
@@ -54,43 +53,34 @@ macro pairwisestat(name, xtype)
 end
 
 # Most PairwiseTransformStatistics will initialize their fields the same way
-function init{T}(s::PairwiseTransformStatistic{T}, nout, nchannels, ntapers)
+function init{T}(s::PairwiseTransformStatistic{T}, nout, nchannels, ntapers, ntrials)
     if !isdefined(s, :pairs); s.pairs = allpairs(nchannels); end
-    s.x = zeros(eltype(fieldtype(s, :x)), nout, size(s.pairs, 2))
-    s.nepochs = zeros(Int, size(s.pairs, 2))
-    s.tmp = falses(nchannels)
+    s.x = zeros(eltype(fieldtype(s, :x)), datasize(s, nout))
+    s.n = zeros(Int32, nout, size(s.pairs, 2))
 end
+datasize(s::PairwiseTransformStatistic, nout) = (nout, size(s.pairs, 2))
 
-# Create accumulate function that loops over pairs of channels, performing some transform for each
+# Create accumulate function that loops over pairs of channels,
+# performing some transform for each
 macro accumulatebypair(stat, arr, freqindex, pairindex, ch1ft, ch2ft, code)
     quote
-        # Split out the two FFTs to allow efficient computation in shift predictor case
-        function $(esc(:accumulatepairs))(s::$stat, fftout1, fftout2, itaper)
-            $arr = s.x
-            tmp = s.tmp
+        # fftout1 and fftout2 are split out above to allow efficient
+        # computation of the shift predictor
+        # s.x is split out to allow efficient jackknifing
+        function $(esc(:accumulateinternal))($arr, n, s::$stat, fftout1, fftout2, itaper)
             pairs = s.pairs
-            nepochs = s.nepochs
             @inbounds begin
-                # Find channels with NaNs
-                for i = 1:size(fftout1, 2)
-                    good = true
-                    for j = 1:size(fftout1, 1)
-                        good &= !isnan(real(fftout1[j, i])) & !isnan(real(fftout2[j, i]))
-                    end
-                    tmp[i] = good
-                end
-
                 for $pairindex = 1:size(pairs, 2)
                     ch1 = pairs[1, $pairindex]
                     ch2 = pairs[2, $pairindex]
 
-                    # Skip channels with NaNs
-                    if !tmp[ch1] || !tmp[ch2] continue end
-                    nepochs[$pairindex] += 1
-
                     for $freqindex = 1:size(fftout1, 1)
                         $ch1ft = fftout1[$freqindex, ch1]
+                        if isnan(real($ch1ft)) continue end
                         $ch2ft = fftout2[$freqindex, ch2]
+                        if isnan(real($ch2ft)) continue end
+
+                        n[$freqindex, $pairindex] += 1
                         $code
                     end
                 end
@@ -99,6 +89,10 @@ macro accumulatebypair(stat, arr, freqindex, pairindex, ch1ft, ch2ft, code)
     end
 end
 
+accumulateinto(x, n, s::PairwiseTransformStatistic, fftout, itaper) =
+    accumulateinternal(x, n, s, fftout, fftout, itaper)
+accumulatepairs(s::PairwiseTransformStatistic, fftout1, fftout2, itaper) =
+    accumulateinternal(s.x, s.n, s, fftout1, fftout2, itaper)
 accumulate(s::PairwiseTransformStatistic, fftout, itaper) =
     accumulatepairs(s, fftout, fftout, itaper)
 
@@ -107,66 +101,69 @@ accumulate(s::PairwiseTransformStatistic, fftout, itaper) =
 #
 type PowerSpectrum{T<:Real} <: TransformStatistic{T}
     x::Array{T, 2}
-    nepochs::Vector{Int}
+    n::Matrix{Int32}
     PowerSpectrum() = new()
 end
 PowerSpectrum() = PowerSpectrum{Float64}()
-function init{T}(s::PowerSpectrum{T}, nout, nchannels, ntapers)
+function init{T}(s::PowerSpectrum{T}, nout, nchannels, ntapers, ntrials)
     s.x = zeros(T, nout, nchannels)
-    s.nepochs = zeros(Int, nchannels)
+    s.n = zeros(Int32, nout, nchannels)
 end
 function accumulate(s::PowerSpectrum, fftout, itaper)
     A = s.x
+    n = s.n
     @inbounds for i = 1:size(fftout, 2)
-        # Skip channels with NaNs
-        good = true
         for j = 1:size(fftout, 1)
-            good &= !isnan(real(fftout[j, i]))
-        end
-        if !good continue end
-
-        s.nepochs[i] += 1
-        for j = 1:size(fftout, 1)
-            A[j, i] += abs2(fftout[j, i])
+            ft = fftout[j, i]
+            if isnan(real(ft)) continue end
+            n[j, i] += 1
+            A[j, i] += abs2(ft)
         end
     end
 end
-finish(s::PowerSpectrum) = scale!(s.x, 1./s.nepochs)
+finish(s::PowerSpectrum) = s.x./s.n
 
 #
 # Variance of power spectrum across trials
 #
 type PowerSpectrumVariance{T<:Real} <: TransformStatistic{T}
     x::Array{T, 3}
-    ntrials::Vector{Int}
+    trialn::Matrix{Int32}
+    ntrials::Matrix{Int32}
     ntapers::Int
     PowerSpectrumVariance() = new()
 end
-PowerSpectrumVariance() = PowerSpectrum{Float64}()
-function init{T}(s::PowerSpectrumVariance{T}, nout, nchannels, ntapers)
+PowerSpectrumVariance() = PowerSpectrumVariance{Float64}()
+function init{T}(s::PowerSpectrumVariance{T}, nout, nchannels, ntapers, ntrials)
     s.x = zeros(T, 3, nout, nchannels)
-    s.ntrials = zeros(Int, nchannels)
+    s.trialn = zeros(Int32, nout, nchannels)
+    s.ntrials = zeros(Int32, nout, nchannels)
     s.ntapers = ntapers
 end
-function accumulate(s::PowerSpectrumVariance, fftout, itaper)
+function accumulate{T}(s::PowerSpectrumVariance{T}, fftout, itaper)
     @inbounds begin
         A = s.x
-        for i = 1:size(fftout, 2), j = 1:size(fftout, 1)
-            A[1, j, i] += abs2(fftout[j, i])
-        end
-        if itaper == s.ntapers
-            for i = 1:size(A, 3)
-                # Skip channels with NaNs
-                good = true
-                for j = 1:size(A, 2)
-                    good &= !isnan(real(A[1, j, i]))
-                end
-                if !good continue end
+        trialn = s.trialn
 
-                # http://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Online_algorithm
-                n = (s.ntrials[i] += 1) # n = n + 1
+        for i = 1:size(fftout, 2), j = 1:size(fftout, 1)
+            ft = fftout[j, i]
+            if isnan(real(ft)) continue end
+            A[1, j, i] += abs2(ft)
+            trialn[j, i] += 1
+        end
+
+        if itaper == s.ntapers
+            ntrials = s.ntrials
+            for i = 1:size(A, 3)
                 for j = 1:size(A, 2)
-                    x = A[1, j, i]
+                    # http://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Online_algorithm
+                    if trialn[j, i] == 0; continue; end
+
+                    x = A[1, j, i]/trialn[j, i]
+                    A[1, j, i] = zero(T)
+                    trialn[j, i] = zero(Int32)
+
+                    n = (ntrials[j, i] += 1) # n = n + 1
                     mean = A[2, j, i]
                     delta = x - mean
                     mean = mean + delta/n
@@ -177,7 +174,7 @@ function accumulate(s::PowerSpectrumVariance, fftout, itaper)
         end
     end
 end
-finish(s::PowerSpectrumVariance) = scale!(squeeze(s.x[3, :, :], 1), 1./(s.ntrials - 1))
+finish(s::PowerSpectrumVariance) = squeeze(s.x[3, :, :], 1)./(s.ntrials - 1)
 
 #
 # Cross spectrum
@@ -186,7 +183,7 @@ finish(s::PowerSpectrumVariance) = scale!(squeeze(s.x[3, :, :], 1), 1./(s.ntrial
 @accumulatebypair CrossSpectrum A j i x y begin
     A[j, i] += conj(x)*y
 end
-finish(s::CrossSpectrum) = scale!(s.x, 1./s.nepochs)
+finish(s::CrossSpectrum) = s.x./s.n
 
 #
 # Coherency and coherence
@@ -203,12 +200,12 @@ for sym in (:Coherency, :Coherence)
         $sym() = $sym{Float64}()
     end
 end
-function init{T}(s::Union(Coherency{T}, Coherence{T}), nout, nchannels, ntapers)
+function init{T}(s::Union(Coherency{T}, Coherence{T}), nout, nchannels, ntapers, ntrials)
     if !isdefined(s, :pairs); s.pairs = allpairs(nchannels); end
     s.psd = PowerSpectrum{T}()
     s.xspec = CrossSpectrum{T}(s.pairs)
-    init(s.psd, nout, nchannels, ntapers)
-    init(s.xspec, nout, nchannels, ntapers)
+    init(s.psd, nout, nchannels, ntapers, ntrials)
+    init(s.xspec, nout, nchannels, ntapers, ntrials)
 end
 function accumulatepairs(s::Union(Coherency, Coherence), fftout1, fftout2, itaper)
     accumulate(s.psd, fftout1, itaper)
@@ -263,15 +260,15 @@ end
     # Faster, but less precise
     #A[j, i] += z*(1/sqrt(abs2(real(z))+abs2(imag(z))))
 end
-finish(s::PLV) = scale!(abs(s.x), 1./s.nepochs)
+finish(s::PLV) = abs(s.x)./s.n
 function finish{T}(s::PPC{T})
     out = zeros(T, size(s.x, 1), size(s.x, 2))
     for i = 1:size(s.x, 2)
-        nepochs = s.nepochs[i]
         for j = 1:size(s.x, 1)
             # This is equivalent to the formulation in Vinck et al. (2010), since
             # 2*sum(unique pairs) = sum(trials)^2-n. 
-            out[j, i] = (abs2(s.x[j, i])-nepochs)/(nepochs*(nepochs-1))
+            n = s.n[j, i]
+            out[j, i] = (abs2(s.x[j, i])-n)/(n*(n-1))
         end
     end
     out
@@ -301,9 +298,9 @@ end
 function finish{T}(s::PLI{T})
     out = zeros(T, size(s.x, 1), size(s.x, 2))
     for i = 1:size(s.x, 2)
-        nepochs = s.nepochs[i]
         for j = 1:size(s.x, 1)
-            out[j. i] = abs(s.x[j, i])/nepochs
+            n = s.n[j, i]
+            out[j. i] = abs(s.x[j, i])/n
         end
     end
     out
@@ -311,9 +308,9 @@ end
 function finish{T}(s::PLI2Unbiased{T})
     out = zeros(T, size(s.x, 1), size(s.x, 2))
     for i = 1:size(s.x, 2)
-        nepochs = s.nepochs[i]
         for j = 1:size(s.x, 1)
-            out[j, i] = (nepochs * abs2(s.x[j, i]/nepochs) - 1)/(nepochs - 1)
+            n = s.n[j, i]
+            out[j, i] = (n * abs2(s.x[j, i]/n) - 1)/(n - 1)
         end
     end
     out
@@ -325,18 +322,13 @@ end
 # See Vinck et al. (2011) as above.
 @pairwisestat WPLI Array{T,3}
 # We need 2 fields per freq/channel in s.x
-function init{T}(s::WPLI{T}, nout, nchannels, ntapers)
-    if !isdefined(s, :pairs); s.pairs = allpairs(nchannels); end
-    s.x = zeros(eltype(fieldtype(s, :x)), 2, nout, size(s.pairs, 2))
-    s.nepochs = zeros(Int, size(s.pairs, 2))
-    s.tmp = falses(nchannels)
-end
+datasize(s::WPLI, nout) = (2, nout, size(s.pairs, 2))
 @accumulatebypair WPLI A j i x y begin
     z = imag(conj(x)*y)
     A[1, j, i] += z
     A[2, j, i] += abs(z)
 end
-function finish{T}(s::WPLI{T}, nepochs)
+function finish{T}(s::WPLI{T}, n)
     out = zeros(T, size(s.x, 2), size(s.x, 3))
     for i = 1:size(out, 2), j = 1:size(out, 1)
         out[j, i] = abs(s.x[1, j, i])/s.x[2, j, i]
@@ -350,12 +342,7 @@ end
 # See Vinck et al. (2011) as above.
 @pairwisestat WPLI2Debiased Array{T,3}
 # We need 3 fields per freq/channel in s.x
-function init{T}(s::WPLI2Debiased{T}, nout, nchannels, ntapers)
-    if !isdefined(s, :pairs); s.pairs = allpairs(nchannels); end
-    s.x = zeros(eltype(fieldtype(s, :x)), 3, nout, size(s.pairs, 2))
-    s.nepochs = zeros(Int, size(s.pairs, 2))
-    s.tmp = falses(nchannels)
-end
+datasize(s::WPLI, nout) = (3, nout, size(s.pairs, 2))
 @accumulatebypair WPLI2Debiased A j i x y begin
     z = imag(conj(x)*y)
     A[1, j, i] += z
@@ -382,14 +369,17 @@ type ShiftPredictor{T<:Real,S<:PairwiseTransformStatistic} <: TransformStatistic
     previous::Array{Complex{T}, 3}
     isfirst::Bool
 end
-ShiftPredictor{T}(stat::PairwiseTransformStatistic{T}) =
-    ShiftPredictor{T,typeof(stat)}(stat, Array(Complex{T}, 0, 0, 0), Array(Complex{T}, 0, 0, 0), true)
+ShiftPredictor{T}(s::PairwiseTransformStatistic{T}) =
+    ShiftPredictor{T,typeof(s)}(s, Array(Complex{T}, 0, 0, 0), Array(Complex{T}, 0, 0, 0), true)
 
-function init{T}(s::ShiftPredictor{T}, nout, nchannels, ntapers)
+function init{T}(s::ShiftPredictor{T}, nout, nchannels, ntapers, ntrials)
+    if ntrials == 1
+        error("Need >1 trial to generate shift predictor")
+    end
     s.first = Array(Complex{T}, nout, nchannels, ntapers)
     s.previous = Array(Complex{T}, nout, nchannels, ntapers)
     s.isfirst = true
-    init(s.stat, nout, nchannels, ntapers)
+    init(s.stat, nout, nchannels, ntapers, ntrials)
 end
 function accumulate(s::ShiftPredictor, fftout, itaper)
     first = pointer_to_array(pointer(s.first, size(s.first, 1)*size(s.first, 2)*(itaper - 1)+1),
@@ -418,6 +408,99 @@ function finish(s::ShiftPredictor)
 end
 
 #
+# Jackknife
+#
+type Jackknife{T<:Real,S<:PairwiseTransformStatistic,U<:Number,N} <: TransformStatistic{T}
+    stat::S
+    count::Int
+    xoffset::Int
+    x::Array{U,N}
+    noffset::Int
+    n::Array{Int32,3}
+
+    Jackknife(stat::S) = new(stat)
+end
+function Jackknife{T}(s::PairwiseTransformStatistic{T})
+    dtype = fieldtype(s, :x)
+    Jackknife{T,typeof(s),eltype(dtype),ndims(dtype)+1}(s)
+end
+
+function init{T,S,U}(s::Jackknife{T,S,U}, nout, nchannels, ntapers, ntrials)
+    init(s.stat, nout, nchannels, ntapers, ntrials-1)
+    s.count = 0
+    xsize = size(s.stat.x)
+    s.xoffset = prod(xsize)
+    s.x = zeros(U, xsize..., ntrials)
+    nsize = size(s.stat.n)
+    s.noffset = prod(nsize)
+    s.n = zeros(Int32, nsize..., ntrials)
+end
+function accumulate(s::Jackknife, fftout, itaper)
+    # Accumulate into column for trial
+    i = (s.count += (itaper == 1))
+    x = pointer_to_array(pointer(s.x, s.xoffset*(i-1)+1), size(s.stat.x))
+    n = pointer_to_array(pointer(s.n, s.noffset*(i-1)+1), size(s.stat.n))
+    accumulateinto(x, n, s.stat, fftout, itaper)
+end
+function finish{T,S}(s::Jackknife{T,S})
+    stat = s.stat
+    xsize = size(stat.x)
+    nsize = size(stat.n)
+    x = s.x
+    n = s.n
+
+    xsum = sum(x, ndims(x))
+
+    # Subtract each x and n from the sum
+    broadcast!(-, x, xsum, x)
+    nsum = sum(n, 3)
+    nsub = nsum .- n
+    nz = reshape(sum(n .!= 0, 3), size(n, 1), size(n, 2))
+
+    # Compute for first surrogate
+    stat.x = pointer_to_array(pointer(x, 1), xsize, false)
+    stat.n = pointer_to_array(pointer(nsub, 1), nsize, false)
+    m = finish(stat)
+    m[n[:, :, 1] .== 0] = 0
+    allout = zeros(eltype(m), size(m, 1), size(m, 2), s.count)
+    allout[:, :, 1] = m
+
+    # Compute statistic and mean for subsequent surrogates
+    for i = 2:s.count
+        stat.x = pointer_to_array(pointer(x, s.xoffset*(i-1)+1), xsize, false)
+        stat.n = pointer_to_array(pointer(nsub, s.noffset*(i-1)+1), nsize, false)
+        out = finish(stat)
+        allout[:, :, i] = out
+        for j = 1:size(out, 2), k = 1:size(out, 1)
+            # Ignore if no tapers
+            if n[k, j, i] != 0
+                m[k, j] += out[k, j]
+            end
+        end
+    end
+
+    # Divide mean by number of non-zero pairs
+    broadcast!(/, m, m, nz)
+
+    # Compute true statistic and bias
+    stat.x = squeeze(xsum, ndims(xsum))
+    stat.n = squeeze(nsum, 2)
+    truestat = finish(stat)
+    bias = (nz - 1).*(m - truestat)
+
+    # Compute variance
+    variance = zeros(eltype(m), size(m))
+    for i = 1:size(allout, 3), j = 1:size(allout, 2), k = 1:size(allout, 1)
+        if n[k, j, i] != 0
+            variance[k, j] += abs2(allout[k, j, i] - m[k, j])
+        end
+    end
+    broadcast!(/, variance, variance, nz-1)
+
+    (truestat, variance, bias)
+end
+
+#
 # Apply transform statistic to transformed data
 #
 # Data is
@@ -425,7 +508,7 @@ end
 # frequencies x channels x ntapers x trials or
 # frequencies x time x channels x ntapers x trials
 function applystat{T<:Real}(s::TransformStatistic{T}, data::Array{Complex{T},4})
-    init(s, size(data, 1), size(data, 2), size(data, 3))
+    init(s, size(data, 1), size(data, 2), size(data, 3), size(data, 4))
     offset = size(data, 1)*size(data, 2)
     for j = 1:size(data, 4), itaper = 1:size(data, 3)
             accumulate(s, pointer_to_array(pointer(data,

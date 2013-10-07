@@ -43,21 +43,15 @@ truth = readdlm(joinpath(testdir, "coherence_phi.txt"), '\t')[2:end-1]
 @test_approx_eq angle(c2[2:end-1]) truth
 
 # Test mtfft and applystat
-@test_approx_eq applystat(PowerSpectrum(), mtfft(in1, 1000, nfft=512)) out1
-@test_approx_eq applystat(CrossSpectrum(), mtfft(in1, 1000, nfft=512)) sXY1
-@test_approx_eq applystat(Coherence(), mtfft(in1, 1000, nfft=512)) c
+ft = mtfft(in1, 1000, nfft=512)
+@test_approx_eq applystat(PowerSpectrum(), ft) out1
+@test_approx_eq applystat(CrossSpectrum(), ft) sXY1
+@test_approx_eq applystat(Coherence(), ft) c
 
-# Test shift predictor
-x = 0:63
-signal = zeros(length(x), 1, 35)
-for i = 1:size(signal, 3)
-	signal[:, i] = cos(0.2pi*x+rand()*2pi)
-end
-c = multitaper([signal signal], Coherence())
-@test_approx_eq c 1
-t = multitaper([signal signal[:, :, circshift([1:size(signal, 3)], 1)]], Coherence())
-sp = multitaper([signal signal], ShiftPredictor(Coherence()))
-@test_approx_eq t sp
+# Test power spectrum variance
+varin = reshape(input[1], 43, 1, 7)
+ft = mtfft(varin, 1000, nfft=512)
+@test_approx_eq applystat(PowerSpectrumVariance(), ft) var(mean(abs2(ft), 3), 4)
 
 # Test PLV and PPC
 angles = [
@@ -86,12 +80,61 @@ band = nperiods + 1
 x = 0:2*pi/period:2*pi*nperiods-2*pi/period
 signal1 = repeat(cos(x), inner=[1, 1, length(angles)])
 signal2 = cat(3, [cos(x + a) for a in angles]...)
+plv_signals = [signal1 signal2]
 
-coh, plv, ppc = multitaper([signal1 signal2], (Coherence(), PLV(), PPC()), tapers=ones(period*nperiods))
+coh, plv, ppc = multitaper(plv_signals, (Coherence(), PLV(), PPC()), tapers=ones(period*nperiods))
 
 @test_approx_eq coh[band] true_plv
 @test_approx_eq plv[band] true_plv
 @test_approx_eq ppc[band] true_ppc
+
+# Test NaN handling
+ft1 = mtfft(plv_signals, tapers=ones(period*nperiods))
+ft2 = copy(ft1)
+ft2[5, 2, 1] = NaN
+
+expected = applystat(PowerSpectrum(), ft1)
+expected[5, 2] = applystat(PowerSpectrum(), ft1[:, :, 2:end])[5, 2]
+out = applystat(PowerSpectrum(), ft2)
+@test_approx_eq out expected
+
+out = applystat(CrossSpectrum(), ft2)
+expected = applystat(CrossSpectrum(), ft1)
+expected[5, 1] = applystat(CrossSpectrum(), ft1[:, :, 2:end])[5, 1]
+@test_approx_eq out expected
+
+out = applystat(Coherence(), ft2)
+expected = applystat(Coherence(), ft1)
+expected[5, 1] = applystat(Coherence(), ft1[:, :, 2:end])[5, 1]
+@test_approx_eq out expected
+
+ft2[5, 2, :] = NaN
+@test findn(isnan(applystat(PowerSpectrum(), ft2))) == ([5],[2])
+@test findn(isnan(real(applystat(CrossSpectrum(), ft2)))) == ([5],[1])
+@test findn(isnan(applystat(Coherence(), ft2))) == ([5],[1])
+
+# Test jackknife
+jn = multitaper(plv_signals, Jackknife(PLV()), tapers=ones(period*nperiods))
+@test_approx_eq jn[1] plv
+estimates = zeros(size(plv, 1), size(plv, 2), size(plv_signals, 3))
+for i = 1:size(plv_signals, 3)
+	estimates[:, :, i] = multitaper(plv_signals[:, :, [1:i-1, i+1:size(plv_signals,3)]],
+		                            PLV(), tapers=ones(period*nperiods))
+end
+@test_approx_eq jn[2] var(estimates, 3)
+@test_approx_eq jn[3] (size(plv_signals, 3)-1)*(mean(estimates, 3) - plv)
+
+# Test shift predictor
+x = 0:63
+signal = zeros(length(x), 1, 35)
+for i = 1:size(signal, 3)
+	signal[:, i] = cos(0.2pi*x+rand()*2pi)
+end
+c = multitaper([signal signal], Coherence())
+@test_approx_eq c 1
+t = multitaper([signal signal[:, :, circshift([1:size(signal, 3)], 1)]], Coherence())
+sp = multitaper([signal signal], ShiftPredictor(Coherence()))
+@test_approx_eq t sp
 
 # Test Morlet wavelet bases
 #

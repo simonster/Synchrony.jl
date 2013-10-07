@@ -41,7 +41,7 @@ function multitaper{T<:Real}(A::Union(AbstractVector{T}, AbstractMatrix{T}, Abst
                            convert(T, sqrt(1/fs)) : multiplier
 
     for stat in stats
-        init(stat, length(freqrange), nchannels, ntapers)
+        init(stat, length(freqrange), nchannels, ntapers, size(A, 3))
     end
 
     dtype = outputtype(T)
