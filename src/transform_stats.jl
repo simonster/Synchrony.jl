@@ -89,8 +89,10 @@ macro accumulatebypair(stat, arr, freqindex, pairindex, ch1ft, ch2ft, code)
     end
 end
 
-accumulateinto(x, n, s::PairwiseTransformStatistic, fftout, itaper) =
+function accumulateinto!(x, n, s::PairwiseTransformStatistic, fftout, itaper)
     accumulateinternal(x, n, s, fftout, fftout, itaper)
+    true
+end
 accumulatepairs(s::PairwiseTransformStatistic, fftout1, fftout2, itaper) =
     accumulateinternal(s.x, s.n, s, fftout1, fftout2, itaper)
 accumulate(s::PairwiseTransformStatistic, fftout, itaper) =
@@ -109,9 +111,9 @@ function init{T}(s::PowerSpectrum{T}, nout, nchannels, ntapers, ntrials)
     s.x = zeros(T, nout, nchannels)
     s.n = zeros(Int32, nout, nchannels)
 end
-function accumulate(s::PowerSpectrum, fftout, itaper)
-    A = s.x
-    n = s.n
+accumulate(s::PowerSpectrum, fftout, itaper) =
+    accumulateinto!(s.x, s.n, s, fftout, itaper)
+function accumulateinto!(A, n, s::PowerSpectrum, fftout, itaper)
     @inbounds for i = 1:size(fftout, 2)
         for j = 1:size(fftout, 1)
             ft = fftout[j, i]
@@ -120,6 +122,7 @@ function accumulate(s::PowerSpectrum, fftout, itaper)
             A[j, i] += abs2(ft)
         end
     end
+    true
 end
 finish(s::PowerSpectrum) = s.x./s.n
 
@@ -363,46 +366,93 @@ end
 #
 # Shift predictors
 #
-type ShiftPredictor{T<:Real,S<:PairwiseTransformStatistic} <: TransformStatistic{T}
+type ShiftPredictor{T<:Real,S<:PairwiseTransformStatistic} <: PairwiseTransformStatistic{T}
     stat::S
-    first::Array{Complex{T}, 3}
-    previous::Array{Complex{T}, 3}
-    isfirst::Bool
+    lag::Int
+    first::Array{Complex{T}, 4}
+    previous::Array{Complex{T}, 4}
+    buffered::Int
+    pos::Int
+    remaining::Int
+
+    ShiftPredictor(s::PairwiseTransformStatistic{T}, lag::Int) = new(s, lag)
 end
-ShiftPredictor{T}(s::PairwiseTransformStatistic{T}) =
-    ShiftPredictor{T,typeof(s)}(s, Array(Complex{T}, 0, 0, 0), Array(Complex{T}, 0, 0, 0), true)
+ShiftPredictor{T}(s::PairwiseTransformStatistic{T}, lag::Int=1) =
+    ShiftPredictor{T,typeof(s)}(s, lag)
 
 function init{T}(s::ShiftPredictor{T}, nout, nchannels, ntapers, ntrials)
-    if ntrials == 1
-        error("Need >1 trial to generate shift predictor")
+    if ntrials <= s.lag
+        error("Need >lag trials to generate shift predictor")
     end
-    s.first = Array(Complex{T}, nout, nchannels, ntapers)
-    s.previous = Array(Complex{T}, nout, nchannels, ntapers)
-    s.isfirst = true
+    s.first = Array(Complex{T}, nout, nchannels, ntapers, s.lag)
+    s.previous = Array(Complex{T}, nout, nchannels, ntapers, s.lag)
+    s.buffered = 0
+    s.pos = 0
+    s.remaining = ntrials*ntapers
     init(s.stat, nout, nchannels, ntapers, ntrials)
 end
+
 function accumulate(s::ShiftPredictor, fftout, itaper)
-    first = pointer_to_array(pointer(s.first, size(s.first, 1)*size(s.first, 2)*(itaper - 1)+1),
-                             (size(s.first, 1), size(s.first, 2)), false)
-    previous = pointer_to_array(pointer(s.previous, size(s.previous, 1)*size(s.previous, 2)*(itaper - 1)+1),
+    offset = size(s.previous, 1)*size(s.previous, 2)
+    ntapers = size(s.previous, 3)
+    bufsize = ntapers*size(s.previous, 4)
+
+    previous = pointer_to_array(pointer(s.previous, offset*s.pos+1),
                                 (size(s.previous, 1), size(s.previous, 2)), false)
-    if s.isfirst
+    if s.remaining <= 0
+        first = pointer_to_array(pointer(s.first, offset*(-s.remaining)+1),
+                                 (size(s.previous, 1), size(s.previous, 2)), false)
+        accumulatepairs(s.stat, first, previous, (-s.remaining % ntapers)+1)
+        s.buffered -= 1
+    elseif s.buffered < bufsize
+        first = pointer_to_array(pointer(s.first, offset*s.buffered+1),
+                                 (size(s.previous, 1), size(s.previous, 2)), false)
         copy!(first, fftout)
-        s.isfirst = itaper != size(s.first, 3)
+        copy!(previous, fftout)
+        s.buffered += 1
     else
-        accumulatepairs(s.stat, previous, fftout, itaper)
+        accumulatepairs(s.stat, fftout, previous, itaper)
+        copy!(previous, fftout)
     end
-    copy!(previous, fftout)
+    s.pos = (s.pos + 1) % bufsize
+    s.remaining -= 1
 end
+
+function accumulateinto!(x, n, s::ShiftPredictor, fftout, itaper)
+    ret = false
+    offset = size(s.previous, 1)*size(s.previous, 2)
+    ntapers = size(s.previous, 3)
+    bufsize = ntapers*size(s.previous, 4)
+
+    previous = pointer_to_array(pointer(s.previous, offset*s.pos+1),
+                                (size(s.previous, 1), size(s.previous, 2)), false)
+    if s.remaining <= 0
+        first = pointer_to_array(pointer(s.first, offset*(-s.remaining)+1),
+                                 (size(s.previous, 1), size(s.previous, 2)), false)
+        accumulateinternal(x, n, s.stat, first, previous, (-s.remaining % ntapers)+1)
+        s.buffered -= 1
+        ret = true
+    elseif s.buffered < bufsize
+        first = pointer_to_array(pointer(s.first, offset*s.buffered+1),
+                                 (size(s.previous, 1), size(s.previous, 2)), false)
+        copy!(first, fftout)
+        copy!(previous, fftout)
+        s.buffered += 1
+    else
+        accumulateinternal(x, n, s.stat, fftout, previous, itaper)
+        copy!(previous, fftout)
+        ret = true
+    end
+    s.pos = (s.pos + 1) % bufsize
+    s.remaining -= 1
+
+    ret
+end
+
 function finish(s::ShiftPredictor)
-    if !s.isfirst
-        for itaper = 1:size(s.first, 3)
-            first = pointer_to_array(pointer(s.first, size(s.first, 1)*size(s.first, 2)*(itaper - 1)+1),
-                                     (size(s.first, 1), size(s.first, 2)), false)
-            previous = pointer_to_array(pointer(s.previous, size(s.previous, 1)*size(s.previous, 2)*(itaper - 1)+1),
-                                        (size(s.previous, 1), size(s.previous, 2)), false)
-            accumulatepairs(s.stat, previous, first, itaper)
-        end
+    s.remaining = 0
+    while s.buffered != 0
+        accumulate(s, nothing, nothing)
     end
     finish(s.stat)
 end
@@ -410,13 +460,15 @@ end
 #
 # Jackknife
 #
-type Jackknife{T<:Real,S<:PairwiseTransformStatistic,U<:Number,N} <: TransformStatistic{T}
+type Jackknife{T<:Real,S<:Union(ShiftPredictor,PairwiseTransformStatistic),U<:Number,N} <: TransformStatistic{T}
     stat::S
+    ntapers::Int
     count::Int
     xoffset::Int
     x::Array{U,N}
     noffset::Int
     n::Array{Int32,3}
+    ntapers::Int
 
     Jackknife(stat::S) = new(stat)
 end
@@ -424,30 +476,54 @@ function Jackknife{T}(s::PairwiseTransformStatistic{T})
     dtype = fieldtype(s, :x)
     Jackknife{T,typeof(s),eltype(dtype),ndims(dtype)+1}(s)
 end
+function Jackknife{T}(s::ShiftPredictor{T})
+    dtype = fieldtype(s.stat, :x)
+    Jackknife{T,typeof(s),eltype(dtype),ndims(dtype)+1}(s)
+end
+
+# Get the underlying statistic
+motherstat{T}(s::Jackknife{T}) = s.stat
+motherstat{T,S<:ShiftPredictor}(s::Jackknife{T,S}) = s.stat.stat
 
 function init{T,S,U}(s::Jackknife{T,S,U}, nout, nchannels, ntapers, ntrials)
-    init(s.stat, nout, nchannels, ntapers, ntrials-1)
+    init(s.stat, nout, nchannels, ntapers, ntrials)
+    s.ntapers = ntapers
     s.count = 0
-    xsize = size(s.stat.x)
+
+    stat = motherstat(s)
+    xsize = size(stat.x)
+    nsize = size(stat.n)
+
     s.xoffset = prod(xsize)
     s.x = zeros(U, xsize..., ntrials)
-    nsize = size(s.stat.n)
+
     s.noffset = prod(nsize)
     s.n = zeros(Int32, nsize..., ntrials)
 end
 function accumulate(s::Jackknife, fftout, itaper)
-    # Accumulate into column for trial
-    i = (s.count += (itaper == 1))
-    x = pointer_to_array(pointer(s.x, s.xoffset*(i-1)+1), size(s.stat.x))
-    n = pointer_to_array(pointer(s.n, s.noffset*(i-1)+1), size(s.stat.n))
-    accumulateinto(x, n, s.stat, fftout, itaper)
+    # Accumulate into trial slice
+    i = s.count
+    x = pointer_to_array(pointer(s.x, s.xoffset*i+1), size(motherstat(s).x))
+    n = pointer_to_array(pointer(s.n, s.noffset*i+1), (size(s.n, 1), size(s.n, 2)))
+    accumulated = accumulateinto!(x, n, s.stat, fftout, itaper)
+    s.count += (accumulated && itaper == s.ntapers)
+    accumulated
 end
 function finish{T,S}(s::Jackknife{T,S})
-    stat = s.stat
-    xsize = size(stat.x)
-    nsize = size(stat.n)
     x = s.x
     n = s.n
+
+    # The shift predictor requires that we continue to accumulate after
+    # the final FFT has been finished
+    while s.count < size(n, 3)
+        for i = 1:s.ntapers
+            accumulate(s, nothing, i)
+        end
+    end
+
+    stat = motherstat(s)
+    xsize = size(stat.x)
+    nsize = size(stat.n)
 
     xsum = sum(x, ndims(x))
 
@@ -462,19 +538,21 @@ function finish{T,S}(s::Jackknife{T,S})
     stat.n = pointer_to_array(pointer(nsub, 1), nsize, false)
     m = finish(stat)
     m[n[:, :, 1] .== 0] = 0
-    allout = zeros(eltype(m), size(m, 1), size(m, 2), s.count)
+    allout = Array(eltype(m), size(m, 1), size(m, 2), s.count)
     allout[:, :, 1] = m
 
     # Compute statistic and mean for subsequent surrogates
-    for i = 2:s.count
-        stat.x = pointer_to_array(pointer(x, s.xoffset*(i-1)+1), xsize, false)
-        stat.n = pointer_to_array(pointer(nsub, s.noffset*(i-1)+1), nsize, false)
-        out = finish(stat)
-        allout[:, :, i] = out
-        for j = 1:size(out, 2), k = 1:size(out, 1)
-            # Ignore if no tapers
-            if n[k, j, i] != 0
-                m[k, j] += out[k, j]
+    @inbounds begin
+        for i = 2:s.count
+            stat.x = pointer_to_array(pointer(x, s.xoffset*(i-1)+1), xsize, false)
+            stat.n = pointer_to_array(pointer(nsub, s.noffset*(i-1)+1), nsize, false)
+            out = finish(stat)
+            allout[:, :, i] = out
+            for j = 1:size(out, 2), k = 1:size(out, 1)
+                # Ignore if no tapers
+                if n[k, j, i] != 0
+                    m[k, j] += out[k, j]
+                end
             end
         end
     end
@@ -490,9 +568,11 @@ function finish{T,S}(s::Jackknife{T,S})
 
     # Compute variance
     variance = zeros(eltype(m), size(m))
-    for i = 1:size(allout, 3), j = 1:size(allout, 2), k = 1:size(allout, 1)
-        if n[k, j, i] != 0
-            variance[k, j] += abs2(allout[k, j, i] - m[k, j])
+    @inbounds begin
+        for i = 1:size(allout, 3), j = 1:size(allout, 2), k = 1:size(allout, 1)
+            if n[k, j, i] != 0
+                variance[k, j] += abs2(allout[k, j, i] - m[k, j])
+            end
         end
     end
     broadcast!(/, variance, variance, nz-1)
@@ -523,4 +603,46 @@ function applystat{T<:Real}(s::TransformStatistic{T}, data::Array{Complex{T},5})
     out = applystat(s, reshape(data, size(data, 1)*size(data, 2), size(data, 3),
                                size(data, 4), size(data, 5)));
     reshape(out, size(data, 1), size(data, 2), size(out, 2))
+end
+
+#
+# Apply transform statistic to permutations of transformed data
+#
+# Data format is as above
+function permstat{T<:Real}(s::TransformStatistic{T}, data::Array{Complex{T},4}, nperms::Int)
+    p1 = doperm(s, data)
+    perms = similar(p1, tuple(size(p1, 1), size(p1, 2), nperms))
+    perms[:, :, 1] = p1
+    for i = 2:nperms
+        perms[:, :, i] = doperm(s, data)
+    end
+    perms
+end
+permstat{T<:Real}(s::TransformStatistic{T}, data::Array{Complex{T},3}, nperms::Int) =
+    permstat(s, reshape(data, size(data, 1), size(data, 2), 1, size(data, 3)), nperms)
+function permstat{T<:Real}(s::TransformStatistic{T}, data::Array{Complex{T},5}, nperms::Int)
+    out = permstat(s, reshape(data, size(data, 1)*size(data, 2), size(data, 3),
+                               size(data, 4), size(data, 5)), nperms);
+    reshape(out, size(data, 1), size(data, 2), size(out, 2), nperms)
+end
+
+function doperm(s, data)
+    init(s, size(data, 1), size(data, 2), size(data, 3), size(data, 4))
+    trials = Array(Int32, size(data, 2), size(data, 4))
+    trialtmp = Int32[1:size(data, 4)]
+    tmp = similar(data, (size(data, 1), size(data, 2)))
+
+    for j = 1:size(data, 2)
+        shuffle!(trialtmp)
+        trials[j, :] = trialtmp
+    end
+
+    for k = 1:size(data, 4), itaper = 1:size(data, 3)
+        for m = 1:size(data, 2), n = 1:size(data, 1)
+            # TODO consider transposing data array
+            tmp[n, l] = data[n, m, itaper, trials[m, k]]
+        end
+        accumulate(s, tmp, itaper)
+    end
+    finish(s)
 end

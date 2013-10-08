@@ -132,9 +132,20 @@ for i = 1:size(signal, 3)
 end
 c = multitaper([signal signal], Coherence())
 @test_approx_eq c 1
-t = multitaper([signal signal[:, :, circshift([1:size(signal, 3)], 1)]], Coherence())
-sp = multitaper([signal signal], ShiftPredictor(Coherence()))
-@test_approx_eq t sp
+for lag = 1:5
+	t = multitaper([signal signal[:, :, circshift([1:size(signal, 3)], lag)]], Coherence())
+	sp = multitaper([signal signal], ShiftPredictor(Coherence(), lag))
+	@test_approx_eq t sp
+end
+
+# Test jackknifed shift predictor
+for lag = 1:5
+	t = multitaper([signal signal[:, :, circshift([1:size(signal, 3)], lag)]], Jackknife(PLV()))
+	sp = multitaper([signal signal], Jackknife(ShiftPredictor(PLV(), lag)))
+	@test_approx_eq t[1] sp[1]
+	@test_approx_eq t[2] sp[2]
+	@test_approx_eq t[3] sp[3]
+end
 
 # Test Morlet wavelet bases
 #
