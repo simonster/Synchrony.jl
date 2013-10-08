@@ -18,7 +18,8 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 export PowerSpectrum, PowerSpectrumVariance, CrossSpectrum, Coherence, Coherency, PLV, PPC, PLI,
-       PLI2Unbiased, WPLI, WPLI2Debiased, ShiftPredictor, Jackknife, allpairs, applystat
+       PLI2Unbiased, WPLI, WPLI2Debiased, ShiftPredictor, Jackknife, allpairs, applystat,
+       permstat
 
 # Get all pairs of channels
 function allpairs(n)
@@ -640,7 +641,7 @@ function doperm(s, data)
     for k = 1:size(data, 4), itaper = 1:size(data, 3)
         for m = 1:size(data, 2), n = 1:size(data, 1)
             # TODO consider transposing data array
-            tmp[n, l] = data[n, m, itaper, trials[m, k]]
+            tmp[n, m] = data[n, m, itaper, trials[m, k]]
         end
         accumulate(s, tmp, itaper)
     end

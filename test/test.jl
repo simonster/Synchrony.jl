@@ -128,7 +128,7 @@ end
 x = 0:63
 signal = zeros(length(x), 1, 35)
 for i = 1:size(signal, 3)
-	signal[:, i] = cos(0.2pi*x+rand()*2pi)
+	signal[:, 1, i] = cos(0.2pi*x+rand()*2pi)
 end
 c = multitaper([signal signal], Coherence())
 @test_approx_eq c 1
@@ -146,6 +146,19 @@ for lag = 1:5
 	@test_approx_eq t[2] sp[2]
 	@test_approx_eq t[3] sp[3]
 end
+
+# Test permutations
+#
+# There's no good test for whether the output is "correct," but we test
+# a case where the permuted output should be unity and a case where it
+# shouldn't
+x = 0:63
+ft = mtfft(repeat(signal[:, 1, 1], inner=[1, 2, 35]))
+perms = permstat(Coherence(), ft, 10)
+@test_approx_eq perms 1
+ft = mtfft([signal signal])
+perms = permstat(Coherence(), ft, 10)
+@test all(perms .!= 1)
 
 # Test Morlet wavelet bases
 #
