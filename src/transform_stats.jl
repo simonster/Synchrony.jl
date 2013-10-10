@@ -77,9 +77,8 @@ macro accumulatebypair(stat, arr, freqindex, pairindex, ch1ft, ch2ft, code)
 
                     for $freqindex = 1:size(fftout1, 1)
                         $ch1ft = fftout1[$freqindex, ch1]
-                        if isnan(real($ch1ft)) continue end
                         $ch2ft = fftout2[$freqindex, ch2]
-                        if isnan(real($ch2ft)) continue end
+                        if isnan(real($ch1ft)) || isnan(real($ch2ft)) continue end
 
                         n[$freqindex, $pairindex] += 1
                         $code
@@ -233,11 +232,13 @@ function finish{T}(s::Coherence{T})
     xspec = finish(s.xspec)
     out = zeros(T, size(xspec, 1), size(xspec, 2))
     pairs = s.pairs
-    for i = 1:size(pairs, 2)
-        ch1 = pairs[1, i]
-        ch2 = pairs[2, i]
-        for j = 1:size(xspec, 1)
-            out[j, i] = abs(xspec[j, i])/sqrt(psd[j, ch1]*psd[j, ch2])
+    @inbounds begin
+        for i = 1:size(pairs, 2)
+            ch1 = pairs[1, i]
+            ch2 = pairs[2, i]
+            for j = 1:size(xspec, 1)
+                out[j, i] = abs(xspec[j, i])/sqrt(psd[j, ch1]*psd[j, ch2])
+            end
         end
     end
     out
@@ -585,6 +586,7 @@ end
 # Apply transform statistic to transformed data
 #
 # Data is
+# channels x trials or
 # frequencies x channels x trials or
 # frequencies x channels x ntapers x trials or
 # frequencies x time x channels x ntapers x trials
@@ -598,11 +600,13 @@ function applystat{T<:Real}(s::TransformStatistic{T}, data::Array{Complex{T},4})
     end
     finish(s)
 end
+applystat{T<:Real}(s::TransformStatistic{T}, data::Array{Complex{T},2}) =
+    vec(applystat(s, reshape(data, 1, size(data, 1), 1, size(data, 2))))
 applystat{T<:Real}(s::TransformStatistic{T}, data::Array{Complex{T},3}) =
     applystat(s, reshape(data, size(data, 1), size(data, 2), 1, size(data, 3)))
 function applystat{T<:Real}(s::TransformStatistic{T}, data::Array{Complex{T},5})
     out = applystat(s, reshape(data, size(data, 1)*size(data, 2), size(data, 3),
-                               size(data, 4), size(data, 5)));
+                               size(data, 4), size(data, 5)))
     reshape(out, size(data, 1), size(data, 2), size(out, 2))
 end
 
