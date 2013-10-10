@@ -44,7 +44,8 @@ function wavebases{T}(w::MorletWavelet{T}, n::Int, fs::Real=1)
         for k = 1:length(w.freq)
             scale = 1/(w.freq[k] * w.fourierfactor)
             norm = sqrt(scale) * normconst
-            for j = 1:size(bases, 1)
+            bases[1, k] = zero(T)
+            for j = 2:size(bases, 1)
                 bases[j, k] = norm * exp(-abs2(scale * df * (j-1) - k0)*0.5)
             end
         end
