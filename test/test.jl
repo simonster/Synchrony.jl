@@ -170,9 +170,6 @@ perms = permstat(Coherence(), ft, 10)
 # to the length of the FFT, which eliminates the need to normalize
 # the output of the inverse FFT.
 d1 = [wavebases(MorletWavelet([0.1], 5), 1024) * 1024; zeros(511, 1)]
-d1[1, :] = 0 # Torrence and Compo don't use the zero frequency
-             # component because they subtract the signal mean in the
-             # time domain.
 d2 = readdlm(joinpath(testdir, "morlet_bases_f_0.1_k0_5.txt"))
 @test_approx_eq d1 d2
 
@@ -180,7 +177,7 @@ d2 = readdlm(joinpath(testdir, "morlet_bases_f_0.1_k0_5.txt"))
 # embedded in white noise
 test_in = readdlm(joinpath(testdir, "wavelet_test_in.txt"))[:]
 foi = readdlm(joinpath(testdir, "wavelet_test_foi.txt"))[:]
-d1 = cwt(test_in - mean(test_in), MorletWavelet(foi, 5))
+d1 = cwt(test_in, MorletWavelet(foi, 5))
 d2 = complex(readdlm(joinpath(testdir, "wavelet_test_out_re.txt"), '\t'), readdlm(joinpath(testdir, "wavelet_test_out_im.txt"), '\t'))
 coi_periods = readdlm(joinpath(testdir, "wavelet_test_coi.txt"))[:]
 for j = 1:length(foi)

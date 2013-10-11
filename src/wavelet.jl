@@ -93,7 +93,18 @@ function evaluate!{T,S<:FloatingPoint}(out::Array{Complex{S}, 2}, t::ContinuousW
         size(out, 1) == length(signal) || error("first dimension of out must match length of signal")
         size(out, 2) == size(bases, 2) || error("second dimension of out must match number of wavelets")
 
-        copy!(fftin, signal)
+        # Compute signal mean ignoring NaN
+        m = 0.0
+        for i = 1:nsignal
+            v = signal[i]
+            m += isnan(v) ? 0.0 : v
+        end
+        m = convert(T, m/nsignal)
+        # Subtract signal mean
+        for i = 1:nsignal
+            fftin[i] = signal[i] - m
+        end
+        fftin[nsignal+1:nfft] = zero(T)
 
         # Interpolate NaN values in input and save their indices to
         # set output to NaN later
@@ -121,7 +132,6 @@ function evaluate!{T,S<:FloatingPoint}(out::Array{Complex{S}, 2}, t::ContinuousW
                 i += 1
             end
         end
-        fftin[nsignal+1:nfft] = zero(T)
         # This simplifies replacement with NaN below
         discard_samples[1] = false
         discard_samples[end] = false
