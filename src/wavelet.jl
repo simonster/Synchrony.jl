@@ -18,13 +18,20 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import Base: getindex, size, ndims, convert
-export MorletWavelet, wavebases, wavecoi, ContinuousWaveletTransform, cwt
+export MorletWavelet, MorseWavelet, wavebases, wavecoi, ContinuousWaveletTransform, cwt
 
 #
 # Mother wavelets, which are convolved with the signal in frequency space
 # 
 abstract MotherWavelet{T}
 
+# The analytic Morlet wavelet. See:
+# Torrence, C., & Compo, G. P. (1998). A practical guide to wavelet
+# analysis. Bulletin of the American Meteorological Society, 79(1),
+# 61–78.
+#
+# freq is the frequency in Hz
+# k0 is the wave number
 immutable MorletWavelet{T} <: MotherWavelet{T}
     freq::Vector{T}
     k0::T
@@ -57,6 +64,52 @@ function wavecoi{T}(w::MorletWavelet{T}, fs::Real=1)
     [sqrt(2) * fs / (f * w.fourierfactor) for f in w.freq]
 end
 
+# Generalized Morse wavelet (first family only). See:
+# Olhede, S. C., & Walden, A. T. (2002). Generalized Morse wavelets.
+# IEEE Transactions on Signal Processing, 50(11), 2661–2670.
+# doi:10.1109/TSP.2002.804066
+# Lilly, J. M., & Olhede, S. C. (2009). Higher-order properties of
+# analytic wavelets. IEEE Transactions on Signal Processing, 57(1),
+# 146–160. doi:10.1109/TSP.2008.2007607
+#
+# freq is the peak frequency in Hz
+# β and γ are wavelet parameters
+immutable MorseWavelet{T} <: MotherWavelet{T}
+    freq::Vector{T}
+    β::T
+    γ::T
+end
+
+# Generate daughter wavelet (samples x frequencies)
+function wavebases{T}(w::MorseWavelet{T}, n::Int, fs::Real=1)
+    γ = w.γ
+    β = w.β
+    # Peak frequency
+    ωs = (β/γ)^(1/γ)
+    dω0 = fs / n * ωs
+    # Olhede & Walden p. 2663, multiplied by sqrt(ωs/(2*pi*f)) for the
+    # frequency with an additional correction by 1/sqrt(n) for the
+    # unnormalized inverse FFT
+    r = (2β+1)/γ
+    α0 = 2^(r/2)*sqrt(γ*ωs)/sqrt(gamma(r)*n)
+
+    bases = Array(T, div(n, 2)+1, length(w.freq))
+    for k = 1:length(w.freq)
+        f = w.freq[k]
+        # Change in angular frequency with each point of the DFT
+        dω = dω0/f
+        α = α0*f^(-0.5)
+        for j = 1:size(bases, 1)
+            ω = dω*(j-1) 
+            bases[j, k] = α * ω^β * exp(-ω^γ)
+        end
+    end
+    bases
+end
+
+#
+# Functions for applying wavelets to data
+#
 immutable ContinuousWaveletTransform{T,S}
     fftin::Vector{T}
     fftout::Vector{S}
