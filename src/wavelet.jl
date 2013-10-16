@@ -23,7 +23,7 @@ export MorletWavelet, MorseWavelet, wavebases, wavecoi, ContinuousWaveletTransfo
 #
 # Mother wavelets, which are convolved with the signal in frequency space
 # 
-abstract MotherWavelet{T}
+abstract MotherWavelet{T<:Real}
 
 # The analytic Morlet wavelet. See:
 # Torrence, C., & Compo, G. P. (1998). A practical guide to wavelet
@@ -60,6 +60,9 @@ function wavebases{T}(w::MorletWavelet{T}, n::Int, fs::Real=1)
     bases
 end
 
+# We use 2 x wavelet's sigma in the time domain for the COI. For the
+# Morlet wavelet, this is the same as the e folding time used by
+# Torrence & Compo.
 function wavecoi{T}(w::MorletWavelet{T}, fs::Real=1)
     [sqrt(2) * fs / (f * w.fourierfactor) for f in w.freq]
 end
@@ -79,6 +82,8 @@ immutable MorseWavelet{T} <: MotherWavelet{T}
     β::T
     γ::T
 end
+MorseWavelet{T<:Real}(freq::Vector{T}, β::Real, γ::Real) =
+    MorseWavelet{T}(freq, convert(T, β), convert(T, γ))
 
 # Generate daughter wavelet (samples x frequencies)
 function wavebases{T}(w::MorseWavelet{T}, n::Int, fs::Real=1)
@@ -105,6 +110,17 @@ function wavebases{T}(w::MorseWavelet{T}, n::Int, fs::Real=1)
         end
     end
     bases
+end
+
+gammatil(x) = gamma(x)/2^x
+function wavecoi{T}(w::MorseWavelet{T}, fs::Real=1)
+    γ = w.γ
+    β = w.β
+    fourierfactor = 2*pi/(β/γ)^(1/γ)
+    sigmaT = sqrt((β^2*gammatil((2β-1)/γ)+γ^2*
+                  gammatil((2β+2*γ-1)/γ)-2β*γ*
+                  gammatil((2β+γ-1)/γ))/gammatil((2*β+1)/γ))
+    [(2 * fs * sigmaT) / (f * fourierfactor) for f in w.freq]
 end
 
 #
