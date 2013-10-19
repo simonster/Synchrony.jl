@@ -262,8 +262,8 @@ end
 function pxcorr(x::AbstractVector, y::AbstractVector, bins::AbstractVector)
     counts = zeros(Int, length(bins))
     nx = length(x)
-    minbin = min(bins)
-    maxbin = max(bins)
+    minbin = minimum(bins)
+    maxbin = maximum(bins)
     nbins = length(bins)
     for yspk in y
         xlo = searchsortedfirst(x, yspk+minbin, Base.Sort.Forward)
