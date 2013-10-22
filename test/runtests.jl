@@ -1,4 +1,4 @@
-using FrequencyDomainAnalysis, Base.Test
+using FrequencyDomainAnalysis, NumericExtensions, Base.Test
 
 const testdir = joinpath(Pkg.dir("FrequencyDomainAnalysis"), "test")
 
@@ -121,7 +121,7 @@ for i = 1:size(plv_signals, 3)
 	estimates[:, :, i] = multitaper(plv_signals[:, :, [1:i-1, i+1:size(plv_signals,3)]],
 		                            PLV(), tapers=ones(period*nperiods))
 end
-@test_approx_eq jn[2] var(estimates, 3)
+@test_approx_eq jn[2] sum(abs2(estimates .- plv), 3)*(size(plv_signals, 3)-1)/size(plv_signals, 3)
 @test_approx_eq jn[3] (size(plv_signals, 3)-1)*(mean(estimates, 3) - plv)
 
 # Test shift predictor

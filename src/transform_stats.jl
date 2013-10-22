@@ -573,11 +573,11 @@ function finish{T,S}(s::Jackknife{T,S})
     @inbounds begin
         for i = 1:size(allout, 3), j = 1:size(allout, 2), k = 1:size(allout, 1)
             if n[k, j, i] != 0
-                variance[k, j] += abs2(allout[k, j, i] - m[k, j])
+                variance[k, j] += abs2(allout[k, j, i] - truestat[k, j])
             end
         end
     end
-    broadcast!(/, variance, variance, nz-1)
+    broadcast!(*, variance, variance, (nz-1)./nz)
 
     (truestat, variance, bias)
 end
