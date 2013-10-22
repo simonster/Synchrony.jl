@@ -528,45 +528,56 @@ function finish{T,S}(s::Jackknife{T,S})
     nsize = size(stat.n)
 
     xsum = sum(x, ndims(x))
-    nsum = sum(n, 3)
-
-    # Compute true statistic and bias
-    stat.x = squeeze(xsum, ndims(xsum))
-    stat.n = squeeze(nsum, 2)
-    truestat = finish(stat)
 
     # Subtract each x and n from the sum
     broadcast!(-, x, xsum, x)
+    nsum = sum(n, 3)
     nsub = nsum .- n
     nz = reshape(sum(n .!= 0, 3), size(n, 1), size(n, 2))
 
-    mu = zeros(eltype(truestat), size(truestat))
-    variance = zeros(eltype(truestat), size(truestat))
+    # Compute for first surrogate
+    stat.x = pointer_to_array(pointer(x, 1), xsize, false)
+    stat.n = pointer_to_array(pointer(nsub, 1), nsize, false)
+    m = finish(stat)
+    m[n[:, :, 1] .== 0] = 0
+    allout = Array(eltype(m), size(m, 1), size(m, 2), s.count)
+    allout[:, :, 1] = m
 
     # Compute statistic and mean for subsequent surrogates
     @inbounds begin
-        for i = 1:s.count
+        for i = 2:s.count
             stat.x = pointer_to_array(pointer(x, s.xoffset*(i-1)+1), xsize, false)
             stat.n = pointer_to_array(pointer(nsub, s.noffset*(i-1)+1), nsize, false)
             out = finish(stat)
+            allout[:, :, i] = out
             for j = 1:size(out, 2), k = 1:size(out, 1)
                 # Ignore if no tapers
                 if n[k, j, i] != 0
-                    variance[k, j] += abs2(out[k, j] - truestat[k, j])
-                    mu[k, j] += out[k, j]
+                    m[k, j] += out[k, j]
                 end
             end
         end
     end
 
     # Divide mean by number of non-zero pairs
-    broadcast!(/, mu, mu, nz)
+    broadcast!(/, m, m, nz)
 
-    # Multiply variance by correction factor
+    # Compute true statistic and bias
+    stat.x = squeeze(xsum, ndims(xsum))
+    stat.n = squeeze(nsum, 2)
+    truestat = finish(stat)
+    bias = (nz - 1).*(m - truestat)
+
+    # Compute variance
+    variance = zeros(eltype(m), size(m))
+    @inbounds begin
+        for i = 1:size(allout, 3), j = 1:size(allout, 2), k = 1:size(allout, 1)
+            if n[k, j, i] != 0
+                variance[k, j] += abs2(allout[k, j, i] - truestat[k, j])
+            end
+        end
+    end
     broadcast!(*, variance, variance, (nz-1)./nz)
-
-    # Compute bias
-    bias = (nz - 1).*(mu - truestat)
 
     (truestat, variance, bias)
 end
