@@ -70,14 +70,15 @@ macro accumulatebypair(stat, arr, freqindex, pairindex, ch1ft, ch2ft, code)
         # s.x is split out to allow efficient jackknifing
         function $(esc(:accumulateinternal))($arr, n, s::$stat, fftout1, fftout2, itaper)
             pairs = s.pairs
+            sz = size(fftout1, 1)
             @inbounds begin
                 for $pairindex = 1:size(pairs, 2)
-                    ch1 = pairs[1, $pairindex]
-                    ch2 = pairs[2, $pairindex]
+                    ch1offset = (pairs[1, $pairindex]-1)*sz
+                    ch2offset = (pairs[2, $pairindex]-1)*sz
 
-                    for $freqindex = 1:size(fftout1, 1)
-                        $ch1ft = fftout1[$freqindex, ch1]
-                        $ch2ft = fftout2[$freqindex, ch2]
+                    for $freqindex = 1:sz
+                        $ch1ft = fftout1[$freqindex+ch1offset]
+                        $ch2ft = fftout2[$freqindex+ch2offset]
                         if isnan(real($ch1ft)) || isnan(real($ch2ft)) continue end
 
                         n[$freqindex, $pairindex] += 1
