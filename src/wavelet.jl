@@ -229,7 +229,7 @@ function evaluate!{T,S<:FloatingPoint}(out::Array{Complex{S}, 2}, t::ContinuousW
             FFTW.execute(T, t.p2.plan)
 
             # Copy to output array
-            copy!(pointer(out, nsignal*(k-1)+1), pointer(ifftwork), nsignal)
+            copy!(out, nsignal*(k-1)+1, ifftwork, 1, nsignal)
 
             # Set NaNs at edges
             coi_length = iceil(t.coi[k])
