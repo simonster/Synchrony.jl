@@ -2,11 +2,6 @@ using FrequencyDomainAnalysis, NumericExtensions, Base.Test
 
 const testdir = joinpath(Pkg.dir("FrequencyDomainAnalysis"), "test")
 
-# Test dpss against dpss computed with MATLAB
-d1 = dpss(128, 4)
-d2 = readdlm(joinpath(testdir, "dpss128,4.txt"), '\t')
-@test_approx_eq d1 d2
-
 # Test psd output against output of pmtm for sinusoid with white noise
 # This can be computed in MATLAB as pmtm(x,4,nextpow2(length(x)),1000,'unity')
 input = cell(2)

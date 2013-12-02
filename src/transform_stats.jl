@@ -75,13 +75,14 @@ macro accumulatebypair(stat, arr, freqindex, pairindex, ch1ft, ch2ft, code)
                 for $pairindex = 1:size(pairs, 2)
                     ch1offset = (pairs[1, $pairindex]-1)*sz
                     ch2offset = (pairs[2, $pairindex]-1)*sz
+                    pairoffset = ($pairindex-1)*sz
 
                     for $freqindex = 1:sz
                         $ch1ft = fftout1[$freqindex+ch1offset]
                         $ch2ft = fftout2[$freqindex+ch2offset]
                         if isnan(real($ch1ft)) || isnan(real($ch2ft)) continue end
 
-                        n[$freqindex, $pairindex] += 1
+                        n[$freqindex+pairoffset] += 1
                         $code
                     end
                 end
@@ -125,7 +126,7 @@ function accumulateinto!(A, n, s::PowerSpectrum, fftout, itaper)
     end
     true
 end
-finish(s::PowerSpectrum) = s.x./s.n
+finish{T}(s::PowerSpectrum{T}) = (s.x./s.n)::Array{T,2}
 
 #
 # Variance of power spectrum across trials
@@ -187,7 +188,7 @@ finish(s::PowerSpectrumVariance) = squeeze(s.x[3, :, :], 1)./(s.ntrials - 1)
 @accumulatebypair CrossSpectrum A j i x y begin
     A[j, i] += conj(x)*y
 end
-finish(s::CrossSpectrum) = s.x./s.n
+finish{T}(s::CrossSpectrum{T}) = (s.x./s.n)::Array{Complex{T},2}
 
 #
 # Coherency and coherence

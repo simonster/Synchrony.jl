@@ -26,7 +26,7 @@ function spiketriggeredspectrum{T<:Integer,S<:Real}(points::AbstractVector{T}, f
                                                     window::Range1{Int};
                                                     nfft::Int=nextpow2(length(window)),
                                                     freqrange::Range1{Int}=1:(nfft >> 1 + 1),
-                                                    tapers::Union(Vector, Matrix)=hann(length(window)))#dpss(length(window), length(window)/fs*10))
+                                                    tapers::Union(Vector, Matrix)=hanning(length(window)))#dpss(length(window), length(window)/fs*10))
     n = length(window)
     nfreq = length(freqrange)
     npoints = length(points)
@@ -92,7 +92,7 @@ end
 function pfcoherence{T<:Real,S<:Real}(sts::Array{Complex{T},3}, stw::Array{S,2};
                                       nfft::Int=nextpow2(length(sta)),
                                       freqrange::Range1{Int}=1:(nfft >> 1 + 1),
-                                      tapers::Union(Vector, Matrix)=hann(length(window)),
+                                      tapers::Union(Vector, Matrix)=hanning(length(window)),
                                       debias::Bool=false)
     if size(sts, 1) != length(freqrange)
         error("Size of spike triggered spectrum must match number of frequencies to use")
