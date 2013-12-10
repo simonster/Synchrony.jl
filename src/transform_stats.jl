@@ -19,7 +19,7 @@
 
 export PowerSpectrum, PowerSpectrumVariance, CrossSpectrum, Coherence, Coherency, PLV, PPC, PLI,
        PLI2Unbiased, WPLI, WPLI2Debiased, ShiftPredictor, Jackknife, allpairs, applystat,
-       permstat
+       permstat, jackknife_bias_var
 
 # Get all pairs of channels
 function allpairs(n)
@@ -464,8 +464,51 @@ end
 #
 # Jackknife
 #
+
+# Compute bias and variance based on jackknife surrogates
+#
+# truestat is the value of the statistic computed over the entire data
+#     set, frequencies x channels
+# surrogates are the jackknife surrogates,
+#     frequencies x channels x ntrials
+# n is the number of valid tapers for each data point,
+#     frequencies x channels x ntrials
+#
+# Returns (truestat, variance, bias)
+function jackknife_bias_var{T}(truestat::Matrix{T}, surrogates::Array{T,3}, n::Array{Int32,3})
+    # Compute sum
+    m = zeros(size(truestat))
+    for i = 1:size(surrogates, 3), j = 1:size(surrogates, 2), k = 1:size(surrogates, 1)
+        # Ignore if no tapers
+        if n[k, j, i] != 0
+            m[k, j] += surrogates[k, j, i]
+        end
+    end
+
+    # Divide sum by number of non-zero pairs
+    nz = reshape(sum(n .!= 0, 3), size(n, 1), size(n, 2))
+    broadcast!(/, m, m, nz)
+
+    bias = (nz - 1).*(m - truestat)
+
+    # Compute variance
+    variance = zeros(eltype(m), size(m))
+    @inbounds begin
+        for i = 1:size(surrogates, 3), j = 1:size(surrogates, 2), k = 1:size(surrogates, 1)
+            if n[k, j, i] != 0
+                variance[k, j] += abs2(surrogates[k, j, i] - m[k, j])
+            end
+        end
+    end
+    broadcast!(*, variance, variance, (nz-1)./nz)
+
+    (bias, variance)
+end
+
 type Jackknife{T<:Real,S<:Union(ShiftPredictor,PairwiseTransformStatistic),U<:Number,N} <: TransformStatistic{T}
     stat::S
+    fn::Base.Callable
+
     ntapers::Int
     count::Int
     xoffset::Int
@@ -537,51 +580,25 @@ function finish{T,S}(s::Jackknife{T,S})
     nsub = nsum .- n
     nz = reshape(sum(n .!= 0, 3), size(n, 1), size(n, 2))
 
-    # Compute for first surrogate
-    stat.x = pointer_to_array(pointer(x, 1), xsize, false)
-    stat.n = pointer_to_array(pointer(nsub, 1), nsize, false)
-    m = finish(stat)
-    m[n[:, :, 1] .== 0] = 0
-    allout = Array(eltype(m), size(m, 1), size(m, 2), s.count)
-    allout[:, :, 1] = m
-
-    # Compute statistic and mean for subsequent surrogates
-    @inbounds begin
-        for i = 2:s.count
-            stat.x = pointer_to_array(pointer(x, s.xoffset*(i-1)+1), xsize, false)
-            stat.n = pointer_to_array(pointer(nsub, s.noffset*(i-1)+1), nsize, false)
-            out = finish(stat)
-            allout[:, :, i] = out
-            for j = 1:size(out, 2), k = 1:size(out, 1)
-                # Ignore if no tapers
-                if n[k, j, i] != 0
-                    m[k, j] += out[k, j]
-                end
-            end
-        end
-    end
-
-    # Divide mean by number of non-zero pairs
-    broadcast!(/, m, m, nz)
-
-    # Compute true statistic and bias
+    # Compute true statistic
     stat.x = squeeze(xsum, ndims(xsum))
     stat.n = squeeze(nsum, 2)
     truestat = finish(stat)
-    bias = (nz - 1).*(m - truestat)
 
-    # Compute variance
-    variance = zeros(eltype(m), size(m))
-    @inbounds begin
-        for i = 1:size(allout, 3), j = 1:size(allout, 2), k = 1:size(allout, 1)
-            if n[k, j, i] != 0
-                variance[k, j] += abs2(allout[k, j, i] - m[k, j])
-            end
-        end
+    # Compute for first surrogate
+    stat.x = pointer_to_array(pointer(x, 1), xsize, false)
+    stat.n = pointer_to_array(pointer(nsub, 1), nsize, false)
+    surrogates = Array(eltype(truestat), size(truestat, 1), size(truestat, 2), s.count)
+
+    # Compute statistic and mean for subsequent surrogates
+    for i = 1:s.count
+        stat.x = pointer_to_array(pointer(x, s.xoffset*(i-1)+1), xsize, false)
+        stat.n = pointer_to_array(pointer(nsub, s.noffset*(i-1)+1), nsize, false)
+        out = finish(stat)
+        surrogates[:, :, i] = out
     end
-    broadcast!(*, variance, variance, (nz-1)./nz)
 
-    (truestat, variance, bias)
+    (truestat, surrogates, n)
 end
 
 #

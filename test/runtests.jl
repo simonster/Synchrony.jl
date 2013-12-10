@@ -110,14 +110,15 @@ ft2[5, 2, :] = NaN
 
 # Test jackknife
 jn = multitaper(plv_signals, Jackknife(PLV()), tapers=ones(period*nperiods))
+(bias, variance) = jackknife_bias_var(jn...)
 @test_approx_eq jn[1] plv
 estimates = zeros(size(plv, 1), size(plv, 2), size(plv_signals, 3))
 for i = 1:size(plv_signals, 3)
 	estimates[:, :, i] = multitaper(plv_signals[:, :, [1:i-1, i+1:size(plv_signals,3)]],
 		                            PLV(), tapers=ones(period*nperiods))
 end
-@test_approx_eq jn[2] sum(abs2(estimates .- mean(estimates, 3)), 3)*(size(plv_signals, 3)-1)/size(plv_signals, 3)
-@test_approx_eq jn[3] (size(plv_signals, 3)-1)*(mean(estimates, 3) - plv)
+@test_approx_eq bias (size(plv_signals, 3)-1)*(mean(estimates, 3) - plv)
+@test_approx_eq variance sum(abs2(estimates .- mean(estimates, 3)), 3)*(size(plv_signals, 3)-1)/size(plv_signals, 3)
 
 # Test shift predictor
 x = 0:63
@@ -138,8 +139,10 @@ for lag = 1:5
 	t = multitaper([signal signal[:, :, circshift([1:size(signal, 3)], lag)]], Jackknife(PLV()))
 	sp = multitaper([signal signal], Jackknife(ShiftPredictor(PLV(), lag)))
 	@test_approx_eq t[1] sp[1]
-	@test_approx_eq t[2] sp[2]
-	@test_approx_eq t[3] sp[3]
+	(tbias, tvar) = jackknife_bias_var(t...)
+	(spbias, spvar) = jackknife_bias_var(sp...)
+	@test_approx_eq tbias spbias
+	@test_approx_eq tvar spvar
 end
 
 # Test permutations
