@@ -1,6 +1,6 @@
-using FrequencyDomainAnalysis, NumericExtensions, Base.Test
+using Synchrony, NumericExtensions, Base.Test
 
-const testdir = joinpath(Pkg.dir("FrequencyDomainAnalysis"), "test")
+const testdir = joinpath(Pkg.dir("Synchrony"), "test")
 
 # Test psd output against output of pmtm for sinusoid with white noise
 # This can be computed in MATLAB as pmtm(x,4,nextpow2(length(x)),1000,'unity')
