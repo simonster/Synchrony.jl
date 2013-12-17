@@ -475,7 +475,7 @@ end
 #     frequencies x channels x ntrials
 #
 # Returns (truestat, variance, bias)
-function jackknife_bias_var{T}(truestat::Matrix{T}, surrogates::Array{T,3}, n::Array{Int32,3})
+function jackknife_bias_var{T,S<:Integer}(truestat::Matrix{T}, surrogates::Array{T,3}, n::Array{S,3})
     # Compute sum
     m = zeros(size(truestat))
     for i = 1:size(surrogates, 3), j = 1:size(surrogates, 2), k = 1:size(surrogates, 1)
@@ -582,7 +582,7 @@ function finish{T,S}(s::Jackknife{T,S})
 
     # Compute true statistic
     stat.x = squeeze(xsum, ndims(xsum))
-    stat.n = squeeze(nsum, 2)
+    stat.n = squeeze(nsum, 3)
     truestat = finish(stat)
 
     # Compute for first surrogate
