@@ -147,7 +147,8 @@ function ContinuousWaveletTransform{T}(w::MotherWavelet{T}, nfft::Int, fs::Real=
     ContinuousWaveletTransform(fftin, fftout, ifftwork, bases, coi, p1, p2)
 end
 
-function evaluate!{T,S<:FloatingPoint}(out::Array{Complex{S}, 2}, t::ContinuousWaveletTransform{T}, signal::Vector{T})
+function evaluate!{T,S<:FloatingPoint}(out::Array{Complex{S}, 2}, t::ContinuousWaveletTransform{T},
+                                       signal::Vector{T}; nancoi::Bool=true)
     @inbounds begin
         fftin = t.fftin
         fftout = t.fftout
@@ -231,19 +232,21 @@ function evaluate!{T,S<:FloatingPoint}(out::Array{Complex{S}, 2}, t::ContinuousW
             # Copy to output array
             copy!(out, nsignal*(k-1)+1, ifftwork, 1, nsignal)
 
-            # Set NaNs at edges
-            coi_length = iceil(t.coi[k])
-            out[1:min(coi_length, nsignal), k] = NaN
-            out[max(nsignal-coi_length+1, 1):end, k] = NaN
+            if nancoi
+                # Set NaNs at edges
+                coi_length = iceil(t.coi[k])
+                out[1:min(coi_length, nsignal), k] = NaN
+                out[max(nsignal-coi_length+1, 1):end, k] = NaN
 
-            # Set NaNs for gaps
-            for i in discard_sample_indices
-                out[i, k] = NaN
-                if !discard_samples[i+1]
-                    out[i:min(i+coi_length, nsignal), k] = NaN
-                end
-                if !discard_samples[i-1]
-                    out[max(i-coi_length, 1):i, k] = NaN
+                # Set NaNs for gaps
+                for i in discard_sample_indices
+                    out[i, k] = NaN
+                    if !discard_samples[i+1]
+                        out[i:min(i+coi_length, nsignal), k] = NaN
+                    end
+                    if !discard_samples[i-1]
+                        out[max(i-coi_length, 1):i, k] = NaN
+                    end
                 end
             end
         end
@@ -252,7 +255,7 @@ function evaluate!{T,S<:FloatingPoint}(out::Array{Complex{S}, 2}, t::ContinuousW
 end
 
 # Friendly interface to ContinuousWaveletTransform
-function cwt{T <: Real}(signal::Vector{T}, w::MotherWavelet, fs::Real=1)
+function cwt{T <: Real}(signal::Vector{T}, w::MotherWavelet, fs::Real=1; nancoi::Bool=true)
     t = ContinuousWaveletTransform(w, nextfastfft(length(signal)), fs)
-    evaluate!(Array(Complex{T}, length(signal), size(t.bases, 2)), t, signal)
+    evaluate!(Array(Complex{T}, length(signal), size(t.bases, 2)), t, signal; nancoi=nancoi)
 end

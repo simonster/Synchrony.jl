@@ -109,16 +109,18 @@ ft2[5, 2, :] = NaN
 @test findn(isnan(applystat(Coherence(), ft2))) == ([5],[1])
 
 # Test jackknife
-jn = multitaper(plv_signals, Jackknife(PLV()), tapers=ones(period*nperiods))
-(bias, variance) = jackknife_bias_var(jn...)
-@test_approx_eq jn[1] plv
-estimates = zeros(size(plv, 1), size(plv, 2), size(plv_signals, 3))
-for i = 1:size(plv_signals, 3)
-	estimates[:, :, i] = multitaper(plv_signals[:, :, [1:i-1, i+1:size(plv_signals,3)]],
-		                            PLV(), tapers=ones(period*nperiods))
+for (stat, trueval) in ((Coherence, coh), (PLV, plv))
+	jn = multitaper(plv_signals, Jackknife(stat()), tapers=ones(period*nperiods))
+	(bias, variance) = jackknife_bias_var(jn...)
+	@test_approx_eq jn[1] trueval
+	estimates = zeros(size(plv, 1), size(plv, 2), size(plv_signals, 3))
+	for i = 1:size(plv_signals, 3)
+		estimates[:, :, i] = multitaper(plv_signals[:, :, [1:i-1, i+1:size(plv_signals,3)]],
+			                            stat(), tapers=ones(period*nperiods))
+	end
+	@test_approx_eq bias (size(plv_signals, 3)-1)*(mean(estimates, 3) - trueval)
+	@test_approx_eq variance sum(abs2(estimates .- mean(estimates, 3)), 3)*(size(plv_signals, 3)-1)/size(plv_signals, 3)
 end
-@test_approx_eq bias (size(plv_signals, 3)-1)*(mean(estimates, 3) - plv)
-@test_approx_eq variance sum(abs2(estimates .- mean(estimates, 3)), 3)*(size(plv_signals, 3)-1)/size(plv_signals, 3)
 
 # Test shift predictor
 x = 0:63

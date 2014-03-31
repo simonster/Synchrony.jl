@@ -179,7 +179,7 @@ function accumulate{T}(s::PowerSpectrumVariance{T}, fftout, itaper)
         end
     end
 end
-finish(s::PowerSpectrumVariance) = squeeze(s.x[3, :, :], 1)./(s.ntrials - 1)
+finish(s::PowerSpectrumVariance) = squeeze(s.x[3, :, :], 1)./(s.ntrials .- 1)
 
 #
 # Cross spectrum
@@ -216,35 +216,21 @@ function accumulatepairs(s::Union(Coherency, Coherence), fftout1, fftout2, itape
     accumulate(s.psd, fftout1, itaper)
     accumulatepairs(s.xspec, fftout1, fftout2, itaper)
 end
-function finish(s::Coherency)
-    psd = finish(s.psd)
-    xspec = finish(s.xspec)
-    pairs = s.pairs
-    for i = 1:size(pairs, 2)
-        ch1 = pairs[1, i]
-        ch2 = pairs[2, i]
-        for j = 1:size(xspec, 1)
-            xspec[j, i] = xspec[j, i]/sqrt(psd[j, ch1]*psd[j, ch2])
+
+# Compute coherency statistic, 
+function finish_coherency!(pairs, psd, xspec)
+    Base.sqrt!(psd)
+    for k = 1:size(xspec, 3), j = 1:size(pairs, 2)
+        ch1 = pairs[1, j]
+        ch2 = pairs[2, j]
+        for i = 1:size(xspec, 1)
+            xspec[i, j, k] = xspec[i, j, k]/(psd[i, ch1, k]*psd[i, ch2, k])
         end
     end
     xspec
 end
-function finish{T}(s::Coherence{T})
-    psd = finish(s.psd)
-    xspec = finish(s.xspec)
-    out = zeros(T, size(xspec, 1), size(xspec, 2))
-    pairs = s.pairs
-    @inbounds begin
-        for i = 1:size(pairs, 2)
-            ch1 = pairs[1, i]
-            ch2 = pairs[2, i]
-            for j = 1:size(xspec, 1)
-                out[j, i] = abs(xspec[j, i])/sqrt(psd[j, ch1]*psd[j, ch2])
-            end
-        end
-    end
-    out
-end
+finish(s::Coherency) = finish_coherency!(s.pairs, finish(s.psd), finish(s.xspec))
+finish(s::Coherence) = abs(finish_coherency!(s.pairs, finish(s.psd), finish(s.xspec)))
 
 #
 # Phase locking value and pairwise phase consistency
@@ -477,7 +463,7 @@ end
 # Returns (truestat, variance, bias)
 function jackknife_bias_var{T,S<:Integer}(truestat::Matrix{T}, surrogates::Array{T,3}, n::Array{S,3})
     # Compute sum
-    m = zeros(size(truestat))
+    m = zeros(T, size(truestat))
     for i = 1:size(surrogates, 3), j = 1:size(surrogates, 2), k = 1:size(surrogates, 1)
         # Ignore if no tapers
         if n[k, j, i] != 0
@@ -487,9 +473,11 @@ function jackknife_bias_var{T,S<:Integer}(truestat::Matrix{T}, surrogates::Array
 
     # Divide sum by number of non-zero pairs
     nz = reshape(sum(n .!= 0, 3), size(n, 1), size(n, 2))
-    broadcast!(/, m, m, nz)
-
-    bias = (nz - 1).*(m - truestat)
+    bias = similar(m)
+    for i = 1:length(m)
+        m[i] = m[i]/nz[i]
+        bias[i] = (nz[i] - 1)*(m[i] - truestat[i])
+    end
 
     # Compute variance
     variance = zeros(eltype(m), size(m))
@@ -500,14 +488,15 @@ function jackknife_bias_var{T,S<:Integer}(truestat::Matrix{T}, surrogates::Array
             end
         end
     end
-    broadcast!(*, variance, variance, (nz-1)./nz)
+    for i = 1:length(variance)
+        variance[i] = variance[i] * (nz[i] - 1)/nz[i]
+    end
 
     (bias, variance)
 end
 
-type Jackknife{T<:Real,S<:Union(ShiftPredictor,PairwiseTransformStatistic),U<:Number,N} <: TransformStatistic{T}
+type JackknifeStat{T<:Real,S<:Union(PairwiseTransformStatistic,PowerSpectrum),U<:Number,N} <: TransformStatistic{T}
     stat::S
-    fn::Base.Callable
 
     ntapers::Int
     count::Int
@@ -517,22 +506,22 @@ type Jackknife{T<:Real,S<:Union(ShiftPredictor,PairwiseTransformStatistic),U<:Nu
     n::Array{Int32,3}
     ntapers::Int
 
-    Jackknife(stat::S) = new(stat)
+    JackknifeStat(stat::S) = new(stat)
 end
-function Jackknife{T}(s::PairwiseTransformStatistic{T})
+function Jackknife{T}(s::Union(PairwiseTransformStatistic{T},PowerSpectrum{T}))
     dtype = fieldtype(s, :x)
-    Jackknife{T,typeof(s),eltype(dtype),ndims(dtype)+1}(s)
+    JackknifeStat{T,typeof(s),eltype(dtype),ndims(dtype)+1}(s)
 end
 function Jackknife{T}(s::ShiftPredictor{T})
     dtype = fieldtype(s.stat, :x)
-    Jackknife{T,typeof(s),eltype(dtype),ndims(dtype)+1}(s)
+    JackknifeStat{T,typeof(s),eltype(dtype),ndims(dtype)+1}(s)
 end
 
 # Get the underlying statistic
-motherstat{T}(s::Jackknife{T}) = s.stat
-motherstat{T,S<:ShiftPredictor}(s::Jackknife{T,S}) = s.stat.stat
+motherstat{T}(s::JackknifeStat{T}) = s.stat
+motherstat{T,S<:ShiftPredictor}(s::JackknifeStat{T,S}) = s.stat.stat
 
-function init{T,S,U}(s::Jackknife{T,S,U}, nout, nchannels, ntapers, ntrials)
+function init{T,S,U}(s::JackknifeStat{T,S,U}, nout, nchannels, ntapers, ntrials)
     init(s.stat, nout, nchannels, ntapers, ntrials)
     s.ntapers = ntapers
     s.count = 0
@@ -547,7 +536,7 @@ function init{T,S,U}(s::Jackknife{T,S,U}, nout, nchannels, ntapers, ntrials)
     s.noffset = prod(nsize)
     s.n = zeros(Int32, nsize..., ntrials)
 end
-function accumulate(s::Jackknife, fftout, itaper)
+function accumulate(s::JackknifeStat, fftout, itaper)
     # Accumulate into trial slice
     i = s.count
     x = pointer_to_array(pointer(s.x, s.xoffset*i+1), size(motherstat(s).x))
@@ -556,7 +545,7 @@ function accumulate(s::Jackknife, fftout, itaper)
     s.count += (accumulated && itaper == s.ntapers)
     accumulated
 end
-function finish{T,S}(s::Jackknife{T,S})
+function finish{T,S}(s::JackknifeStat{T,S})
     x = s.x
     n = s.n
 
@@ -599,6 +588,44 @@ function finish{T,S}(s::Jackknife{T,S})
     end
 
     (truestat, surrogates, n)
+end
+
+# Jackknife for Coherency/Coherence
+for csym in (:Coherency, :Coherence)
+    sym = symbol("Jackknife$(string(csym))")
+    @eval begin
+        type $sym{T<:Real} <: TransformStatistic{T}
+            pairs::Array{Int, 2}
+            psd::JackknifeStat{T,PowerSpectrum{T},T,3}
+            xspec::JackknifeStat{T,CrossSpectrum{T},Complex{T},3}
+            $sym(pairs::Array{Int, 2}) = new(pairs)
+            $sym() = new()
+        end
+        Jackknife{T}(s::$(csym){T}) = isdefined(s, :pairs) ? $sym{T}(pairs) : $sym{T}()
+    end
+end
+function init{T<:Real}(s::Union(JackknifeCoherency{T}, JackknifeCoherence{T}), nout, nchannels, ntapers, ntrials)
+    if !isdefined(s, :pairs); s.pairs = allpairs(nchannels); end
+    s.psd = Jackknife(PowerSpectrum{T}())
+    s.xspec = Jackknife(CrossSpectrum{T}(s.pairs))
+    init(s.psd, nout, nchannels, ntapers, ntrials)
+    init(s.xspec, nout, nchannels, ntapers, ntrials)
+end
+function accumulate(s::Union(JackknifeCoherency, JackknifeCoherence), fftout, itaper)
+    accumulate(s.psd, fftout, itaper)
+    accumulate(s.xspec, fftout, itaper)
+end
+function _finish(s::Union(JackknifeCoherency, JackknifeCoherence))
+    (truepsd, surrogatepsd, npsd) = finish(s.psd)
+    (truexspec, surrogatexspec, nxspec) = finish(s.xspec)
+    truecoherency = finish_coherency!(s.pairs, truepsd, truexspec)
+    surrogatecoherency = finish_coherency!(s.pairs, surrogatepsd, surrogatexspec)
+    (truecoherency, surrogatecoherency, nxspec)
+end
+finish(s::JackknifeCoherency) = _finish(s)
+function finish(s::JackknifeCoherence)
+    (truecoherency, surrogatecoherency, nxspec) = _finish(s)
+    (abs(truecoherency), abs(surrogatecoherency), nxspec)
 end
 
 #
