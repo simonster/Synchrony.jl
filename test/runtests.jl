@@ -72,7 +72,7 @@ true_ppc = 1-var(exp(im*angles)) # yep.
 period = 32
 nperiods = 16
 band = nperiods + 1
-x = 0:2*pi/period:2*pi*nperiods-2*pi/period
+x = (0:2/period:2*nperiods-2/period)*pi
 signal1 = repeat(cos(x), inner=[1, 1, length(angles)])
 signal2 = cat(3, [cos(x + a) for a in angles]...)
 plv_signals = [signal1 signal2]
@@ -127,7 +127,7 @@ for i = 1:size(signal, 3)
 	signal[:, 1, i] = cos(0.2pi*x+rand()*2pi)
 end
 c = multitaper([signal signal], Coherence())
-@test_approx_eq c 1
+@test_approx_eq c ones(size(c))
 for lag = 1:5
 	t = multitaper([signal signal[:, :, circshift([1:size(signal, 3)], lag)]], Coherence())
 	sp = multitaper([signal signal], ShiftPredictor(Coherence(), lag))
@@ -153,7 +153,7 @@ end
 x = 0:63
 ft = mtfft(repeat(signal[:, 1, 1], inner=[1, 2, 35]))
 perms = permstat(Coherence(), ft, 10)
-@test_approx_eq perms 1
+@test_approx_eq perms ones(size(perms))
 ft = mtfft([signal signal])
 perms = permstat(Coherence(), ft, 10)
 @test all(perms .!= 1)
