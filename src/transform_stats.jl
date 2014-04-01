@@ -508,11 +508,11 @@ type JackknifeStat{T<:Real,S<:Union(PairwiseTransformStatistic,PowerSpectrum),U<
 
     JackknifeStat(stat::S) = new(stat)
 end
-function Jackknife{T}(s::Union(PairwiseTransformStatistic{T},PowerSpectrum{T}))
+function Jackknife{T<:Real}(s::Union(PairwiseTransformStatistic{T},PowerSpectrum{T}))
     dtype = fieldtype(s, :x)
     JackknifeStat{T,typeof(s),eltype(dtype),ndims(dtype)+1}(s)
 end
-function Jackknife{T}(s::ShiftPredictor{T})
+function Jackknife{T<:Real}(s::ShiftPredictor{T})
     dtype = fieldtype(s.stat, :x)
     JackknifeStat{T,typeof(s),eltype(dtype),ndims(dtype)+1}(s)
 end
@@ -577,7 +577,7 @@ function finish{T,S}(s::JackknifeStat{T,S})
     # Compute for first surrogate
     stat.x = pointer_to_array(pointer(x, 1), xsize, false)
     stat.n = pointer_to_array(pointer(nsub, 1), nsize, false)
-    surrogates = Array(eltype(truestat), size(truestat, 1), size(truestat, 2), s.count)
+    surrogates = similar(truestat, size(truestat, 1), size(truestat, 2), s.count)
 
     # Compute statistic and mean for subsequent surrogates
     for i = 1:s.count
@@ -594,20 +594,20 @@ end
 for csym in (:Coherency, :Coherence)
     sym = symbol("Jackknife$(string(csym))")
     @eval begin
-        type $sym{T<:Real} <: TransformStatistic{T}
-            pairs::Array{Int, 2}
+        type $sym{T<:Real,S} <: TransformStatistic{T}
             psd::JackknifeStat{T,PowerSpectrum{T},T,3}
-            xspec::JackknifeStat{T,CrossSpectrum{T},Complex{T},3}
-            $sym(pairs::Array{Int, 2}) = new(pairs)
-            $sym() = new()
+            xspec::JackknifeStat{T,S,Complex{T},3}
         end
-        Jackknife{T}(s::$(csym){T}) = isdefined(s, :pairs) ? $sym{T}(pairs) : $sym{T}()
+        Jackknife{T<:Real}(s::$(csym){T}) =
+            $sym{T,CrossSpectrum{T}}(Jackknife(PowerSpectrum{T}()), isdefined(s, :pairs) ? Jackknife(CrossSpectrum{T}(s.pairs)) :
+                                                                                           Jackknife(CrossSpectrum{T}()))
+        Jackknife{T<:Real}(s::ShiftPredictor{T,$(csym){T}}) =
+            $sym{T,ShiftPredictor{T,CrossSpectrum{T}}}(Jackknife(PowerSpectrum{T}()),
+                                                       isdefined(s.stat, :pairs) ? Jackknife(ShiftPredictor(CrossSpectrum{T}(s.stat.pairs), s.lag)) :
+                                                                                   Jackknife(ShiftPredictor(CrossSpectrum{T}(), s.lag)))
     end
 end
 function init{T<:Real}(s::Union(JackknifeCoherency{T}, JackknifeCoherence{T}), nout, nchannels, ntapers, ntrials)
-    if !isdefined(s, :pairs); s.pairs = allpairs(nchannels); end
-    s.psd = Jackknife(PowerSpectrum{T}())
-    s.xspec = Jackknife(CrossSpectrum{T}(s.pairs))
     init(s.psd, nout, nchannels, ntapers, ntrials)
     init(s.xspec, nout, nchannels, ntapers, ntrials)
 end
@@ -615,11 +615,29 @@ function accumulate(s::Union(JackknifeCoherency, JackknifeCoherence), fftout, it
     accumulate(s.psd, fftout, itaper)
     accumulate(s.xspec, fftout, itaper)
 end
+function finish_coherency_sp!(pairs, psd, xspec, lag)
+    Base.sqrt!(psd)
+    for k = 1:size(xspec, 3), j = 1:size(pairs, 2)
+        ch1 = pairs[1, j]
+        ch2 = pairs[2, j]
+        for i = 1:size(xspec, 1)
+            xspec[i, j, k] = xspec[i, j, k]/(psd[i, ch1, k]*psd[i, ch2, (k-1+lag) % size(xspec, 3) + 1])
+        end
+    end
+    xspec
+end
+function _finish{T<:Real,S<:ShiftPredictor}(s::Union(JackknifeCoherency{T,S}, JackknifeCoherence{T,S}))
+    (truepsd, surrogatepsd, npsd) = finish(s.psd)
+    (truexspec, surrogatexspec, nxspec) = finish(s.xspec)
+    truecoherency = finish_coherency_sp!(s.xspec.stat.stat.pairs, truepsd, truexspec, s.xspec.stat.lag)
+    surrogatecoherency = finish_coherency_sp!(s.xspec.stat.stat.pairs, surrogatepsd, surrogatexspec, s.xspec.stat.lag)
+    (truecoherency, surrogatecoherency, nxspec)
+end
 function _finish(s::Union(JackknifeCoherency, JackknifeCoherence))
     (truepsd, surrogatepsd, npsd) = finish(s.psd)
     (truexspec, surrogatexspec, nxspec) = finish(s.xspec)
-    truecoherency = finish_coherency!(s.pairs, truepsd, truexspec)
-    surrogatecoherency = finish_coherency!(s.pairs, surrogatepsd, surrogatexspec)
+    truecoherency = finish_coherency!(s.xspec.stat.pairs, truepsd, truexspec)
+    surrogatecoherency = finish_coherency!(s.xspec.stat.pairs, surrogatepsd, surrogatexspec)
     (truecoherency, surrogatecoherency, nxspec)
 end
 finish(s::JackknifeCoherency) = _finish(s)
@@ -650,10 +668,16 @@ applystat{T<:Real}(s::TransformStatistic{T}, data::Array{Complex{T},2}) =
     vec(applystat(s, reshape(data, 1, size(data, 1), 1, size(data, 2))))
 applystat{T<:Real}(s::TransformStatistic{T}, data::Array{Complex{T},3}) =
     applystat(s, reshape(data, size(data, 1), size(data, 2), 1, size(data, 3)))
+
+drop1(x1, xs...) = xs
+reshape_output(d1::Int, d2::Int, out) = reshape(out, d1, d2, drop1(size(out)...)...)
+reshape_output_tuple(d1::Int, d2::Int) = ()
+reshape_output_tuple(d1::Int, d2::Int, out1, out...) = tuple(reshape_output(d1, d2, out1), reshape_output_tuple(d1, d2, out...)...)
+reshape_output(d1::Int, d2::Int, out::Tuple) = reshape_output_tuple(d1, d2, out...)
 function applystat{T<:Real}(s::TransformStatistic{T}, data::Array{Complex{T},5})
     out = applystat(s, reshape(data, size(data, 1)*size(data, 2), size(data, 3),
                                size(data, 4), size(data, 5)))
-    reshape(out, size(data, 1), size(data, 2), size(out, 2))
+    reshape_output(size(data, 1), size(data, 2), out)
 end
 
 #

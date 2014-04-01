@@ -137,9 +137,9 @@ for lag = 1:5
 end
 
 # Test jackknifed shift predictor
-for lag = 1:5
-	t = multitaper([signal signal[:, :, circshift([1:size(signal, 3)], lag)]], Jackknife(PLV()))
-	sp = multitaper([signal signal], Jackknife(ShiftPredictor(PLV(), lag)))
+for stat in (Coherence, PLV), lag = 1:5
+	t = multitaper([signal signal[:, :, circshift([1:size(signal, 3)], lag)]], Jackknife(stat()))
+	sp = multitaper([signal signal], Jackknife(ShiftPredictor(stat(), lag)))
 	@test_approx_eq t[1] sp[1]
 	(tbias, tvar) = jackknife_bias_var(t...)
 	(spbias, spvar) = jackknife_bias_var(sp...)
