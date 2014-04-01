@@ -7,9 +7,9 @@ const testdir = joinpath(Pkg.dir("Synchrony"), "test")
 input = cell(2)
 output = cell(2)
 for i = 1:2
-	input[i] = readdlm(joinpath(testdir, "psd_test$(i)_in.txt"), '\t')[:]
+	input[i] = float64(readdlm(joinpath(testdir, "psd_test$(i)_in.txt"), '\t'))[:]
 	output[i] = psd(input[i], 1000, nfft=512)[:]
-	truth = readdlm(joinpath(testdir, "psd_test$(i)_out.txt"), '\t')
+	truth = float64(readdlm(joinpath(testdir, "psd_test$(i)_out.txt"), '\t'))
 	@test_approx_eq output[i] truth
 end
 
@@ -26,14 +26,14 @@ sXY1 = xspec(input[1], input[2], 1000, nfft=512)
 sXY2 = xspec(input[2], input[1], 1000, nfft=512)
 @test_approx_eq sXY1 conj(sXY2)
 c = coherence(input[1], input[2], 1000, nfft=512)
-truth = readdlm(joinpath(testdir, "coherence_mag.txt"), '\t')
+truth = float64(readdlm(joinpath(testdir, "coherence_mag.txt"), '\t'))
 @test_approx_eq c truth
 
 # Test multiple channel functionality
 (xs, s, c2) = multitaper(in1, (CrossSpectrum(), PowerSpectrum(), Coherency()), 1000, nfft=512)
 @test_approx_eq s out1
 @test_approx_eq xs sXY1
-truth = readdlm(joinpath(testdir, "coherence_phi.txt"), '\t')[2:end-1]
+truth = float64(readdlm(joinpath(testdir, "coherence_phi.txt"), '\t')[2:end-1])
 @test_approx_eq abs(c2) c
 @test_approx_eq angle(c2[2:end-1]) truth
 
@@ -126,7 +126,7 @@ end
 x = 0:63
 signal = zeros(length(x), 1, 35)
 for i = 1:size(signal, 3)
-	signal[:, 1, i] = cos(0.2pi*x+rand()*2pi)
+	signal[:, 1, i] = cospi(0.2*x+rand()*2)
 end
 c = multitaper([signal signal], Coherence())
 @test_approx_eq c ones(size(c))
@@ -170,16 +170,16 @@ perms = permstat(Coherence(), ft, 10)
 # to the length of the FFT, which eliminates the need to normalize
 # the output of the inverse FFT.
 d1 = [wavebases(MorletWavelet([0.1], 5), 1024) * 1024; zeros(511, 1)]
-d2 = readdlm(joinpath(testdir, "morlet_bases_f_0.1_k0_5.txt"))
+d2 = float64(readdlm(joinpath(testdir, "morlet_bases_f_0.1_k0_5.txt")))
 @test_approx_eq d1 d2
 
 # Test Morlet wavelet by comparing output for a 0.1 Hz oscillation
 # embedded in white noise
-test_in = readdlm(joinpath(testdir, "wavelet_test_in.txt"))[:]
-foi = readdlm(joinpath(testdir, "wavelet_test_foi.txt"))[:]
+test_in = float64(readdlm(joinpath(testdir, "wavelet_test_in.txt"))[:])
+foi = float64(readdlm(joinpath(testdir, "wavelet_test_foi.txt"))[:])
 d1 = cwt(test_in, MorletWavelet(foi, 5))
-d2 = complex(readdlm(joinpath(testdir, "wavelet_test_out_re.txt"), '\t'), readdlm(joinpath(testdir, "wavelet_test_out_im.txt"), '\t'))
-coi_periods = readdlm(joinpath(testdir, "wavelet_test_coi.txt"))[:]
+d2 = complex(float64(readdlm(joinpath(testdir, "wavelet_test_out_re.txt"), '\t')), float64(readdlm(joinpath(testdir, "wavelet_test_out_im.txt"), '\t')))
+coi_periods = float64(readdlm(joinpath(testdir, "wavelet_test_coi.txt"))[:])
 for j = 1:length(foi)
 	period = 1/foi[j]
 	for i = 1:length(coi_periods)
