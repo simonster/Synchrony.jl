@@ -617,11 +617,19 @@ function accumulate(s::Union(JackknifeCoherency, JackknifeCoherence), fftout, it
 end
 function finish_coherency_sp!(pairs, psd, xspec, lag)
     Base.sqrt!(psd)
-    for k = 1:size(xspec, 3), j = 1:size(pairs, 2)
+    noncirc = size(xspec, 3)-lag
+    for k = 1:noncirc, j = 1:size(pairs, 2)
         ch1 = pairs[1, j]
         ch2 = pairs[2, j]
         for i = 1:size(xspec, 1)
-            xspec[i, j, k] = xspec[i, j, k]/(psd[i, ch1, k]*psd[i, ch2, (k-1+lag) % size(xspec, 3) + 1])
+            xspec[i, j, k] = xspec[i, j, k]/(psd[i, ch1, k+lag]*psd[i, ch2, k])
+        end
+    end
+    for k = noncirc+1:size(xspec, 3), j = 1:size(pairs, 2)
+        ch1 = pairs[1, j]
+        ch2 = pairs[2, j]
+        for i = 1:size(xspec, 1)
+            xspec[i, j, k] = xspec[i, j, k]/(psd[i, ch1, k-noncirc]*psd[i, ch2, k])
         end
     end
     xspec
@@ -629,7 +637,7 @@ end
 function _finish{T<:Real,S<:ShiftPredictor}(s::Union(JackknifeCoherency{T,S}, JackknifeCoherence{T,S}))
     (truepsd, surrogatepsd, npsd) = finish(s.psd)
     (truexspec, surrogatexspec, nxspec) = finish(s.xspec)
-    truecoherency = finish_coherency_sp!(s.xspec.stat.stat.pairs, truepsd, truexspec, s.xspec.stat.lag)
+    truecoherency = finish_coherency!(s.xspec.stat.stat.pairs, truepsd, truexspec)
     surrogatecoherency = finish_coherency_sp!(s.xspec.stat.stat.pairs, surrogatepsd, surrogatexspec, s.xspec.stat.lag)
     (truecoherency, surrogatecoherency, nxspec)
 end
