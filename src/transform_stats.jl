@@ -18,8 +18,8 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 export PowerSpectrum, PowerSpectrumVariance, CrossSpectrum, Coherence, Coherency, PLV, PPC, PLI,
-       PLI2Unbiased, WPLI, WPLI2Debiased, ShiftPredictor, Jackknife, allpairs, applystat,
-       permstat, jackknife_bias_var
+       PLI2Unbiased, WPLI, WPLI2Debiased, ShiftPredictor, Jackknife,
+       allpairs, applystat, permstat, jackknife_bias_var
 
 # Get all pairs of channels
 function allpairs(n)
@@ -359,8 +359,8 @@ end
 type ShiftPredictor{T<:Real,S<:PairwiseTransformStatistic} <: PairwiseTransformStatistic{T}
     stat::S
     lag::Int
-    first::Array{Complex{T}, 4}
-    previous::Array{Complex{T}, 4}
+    first::Array{Complex{T}, 3}
+    previous::Array{Complex{T}, 3}
     buffered::Int
     pos::Int
     remaining::Int
@@ -374,8 +374,8 @@ function init{T}(s::ShiftPredictor{T}, nout, nchannels, ntapers, ntrials)
     if ntrials <= s.lag
         error("Need >lag trials to generate shift predictor")
     end
-    s.first = Array(Complex{T}, nout, nchannels, ntapers, s.lag)
-    s.previous = Array(Complex{T}, nout, nchannels, ntapers, s.lag)
+    s.first = Array(Complex{T}, nout, nchannels, ntapers*s.lag)
+    s.previous = Array(Complex{T}, nout, nchannels, ntapers*s.lag)
     s.buffered = 0
     s.pos = 0
     s.remaining = ntrials*ntapers
@@ -383,20 +383,16 @@ function init{T}(s::ShiftPredictor{T}, nout, nchannels, ntapers, ntrials)
 end
 
 function accumulate(s::ShiftPredictor, fftout, itaper)
-    offset = size(s.previous, 1)*size(s.previous, 2)
     ntapers = size(s.previous, 3)
     bufsize = ntapers*size(s.previous, 4)
 
-    previous = pointer_to_array(pointer(s.previous, offset*s.pos+1),
-                                (size(s.previous, 1), size(s.previous, 2)), false)
+    previous = ellipview(s.previous, s.pos+1)
     if s.remaining <= 0
-        first = pointer_to_array(pointer(s.first, offset*(-s.remaining)+1),
-                                 (size(s.previous, 1), size(s.previous, 2)), false)
+        first = ellipview(s.first, 1-s.remaining)
         accumulatepairs(s.stat, first, previous, (-s.remaining % ntapers)+1)
         s.buffered -= 1
     elseif s.buffered < bufsize
-        first = pointer_to_array(pointer(s.first, offset*s.buffered+1),
-                                 (size(s.previous, 1), size(s.previous, 2)), false)
+        first = ellipview(s.first, s.buffered+1)
         copy!(first, fftout)
         copy!(previous, fftout)
         s.buffered += 1
@@ -414,17 +410,14 @@ function accumulateinto!(x, n, s::ShiftPredictor, fftout, itaper)
     ntapers = size(s.previous, 3)
     bufsize = ntapers*size(s.previous, 4)
 
-    previous = pointer_to_array(pointer(s.previous, offset*s.pos+1),
-                                (size(s.previous, 1), size(s.previous, 2)), false)
+    previous = ellipview(s.previous, s.pos+1)
     if s.remaining <= 0
-        first = pointer_to_array(pointer(s.first, offset*(-s.remaining)+1),
-                                 (size(s.previous, 1), size(s.previous, 2)), false)
+        first = ellipview(s.first, 1-s.remaining)
         accumulateinternal(x, n, s.stat, first, previous, (-s.remaining % ntapers)+1)
         s.buffered -= 1
         ret = true
     elseif s.buffered < bufsize
-        first = pointer_to_array(pointer(s.first, offset*s.buffered+1),
-                                 (size(s.previous, 1), size(s.previous, 2)), false)
+        first = ellipview(s.first, s.buffered+1)
         copy!(first, fftout)
         copy!(previous, fftout)
         s.buffered += 1
@@ -500,9 +493,7 @@ type JackknifeStat{T<:Real,S<:Union(PairwiseTransformStatistic,PowerSpectrum),U<
 
     ntapers::Int
     count::Int
-    xoffset::Int
     x::Array{U,N}
-    noffset::Int
     n::Array{Int32,3}
     ntapers::Int
 
@@ -527,20 +518,15 @@ function init{T,S,U}(s::JackknifeStat{T,S,U}, nout, nchannels, ntapers, ntrials)
     s.count = 0
 
     stat = motherstat(s)
-    xsize = size(stat.x)
-    nsize = size(stat.n)
 
-    s.xoffset = prod(xsize)
-    s.x = zeros(U, xsize..., ntrials)
-
-    s.noffset = prod(nsize)
-    s.n = zeros(Int32, nsize..., ntrials)
+    s.x = zeros(U, size(stat.x)..., ntrials)
+    s.n = zeros(Int32, size(stat.n)..., ntrials)
 end
 function accumulate(s::JackknifeStat, fftout, itaper)
     # Accumulate into trial slice
     i = s.count
-    x = pointer_to_array(pointer(s.x, s.xoffset*i+1), size(motherstat(s).x))
-    n = pointer_to_array(pointer(s.n, s.noffset*i+1), (size(s.n, 1), size(s.n, 2)))
+    x = ellipview(s.x, i+1)
+    n = ellipview(s.n, i+1)
     accumulated = accumulateinto!(x, n, s.stat, fftout, itaper)
     s.count += (accumulated && itaper == s.ntapers)
     accumulated
@@ -559,7 +545,9 @@ function finish{T,S}(s::JackknifeStat{T,S})
 
     stat = motherstat(s)
     xsize = size(stat.x)
+    xoffset = prod(xsize)
     nsize = size(stat.n)
+    noffset = prod(nsize)
 
     xsum = sum(x, ndims(x))
 
@@ -581,8 +569,8 @@ function finish{T,S}(s::JackknifeStat{T,S})
 
     # Compute statistic and mean for subsequent surrogates
     for i = 1:s.count
-        stat.x = pointer_to_array(pointer(x, s.xoffset*(i-1)+1), xsize, false)
-        stat.n = pointer_to_array(pointer(nsub, s.noffset*(i-1)+1), nsize, false)
+        stat.x = pointer_to_array(pointer(x, xoffset*(i-1)+1), xsize, false)
+        stat.n = pointer_to_array(pointer(nsub, noffset*(i-1)+1), nsize, false)
         out = finish(stat)
         surrogates[:, :, i] = out
     end
@@ -666,9 +654,7 @@ function applystat{T<:Real}(s::TransformStatistic{T}, data::Array{Complex{T},4})
     init(s, size(data, 1), size(data, 2), size(data, 3), size(data, 4))
     offset = size(data, 1)*size(data, 2)
     for j = 1:size(data, 4), itaper = 1:size(data, 3)
-            accumulate(s, pointer_to_array(pointer(data,
-                                                   offset*((itaper-1)+size(data, 3)*(j-1))+1),
-                                           (size(data, 1), size(data, 2))), itaper)
+            accumulate(s, view(data, :, :, itaper, j), itaper)
     end
     finish(s)
 end
