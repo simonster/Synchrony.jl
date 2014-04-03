@@ -359,7 +359,7 @@ end
 # See Jammalamadaka, S. R., & Sengupta, A. (2001). Topics in Circular
 # Statistics. World Scientific, p. 176
 #
-# The algorithm below is a single pass version of the algorithm in the
+# The algorithm below is a single pass version of the algorithm in
 # Jammalamadaka & Sengupta. The tests verify that it gives the same
 # result.
 @pairwisestat CircularCorrelation Array{Complex{T},3}
