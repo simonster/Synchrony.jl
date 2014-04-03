@@ -25,6 +25,8 @@ out2 = hcat(flipud(output)...)
 sXY1 = xspec(input[1], input[2], 1000, nfft=512)
 sXY2 = xspec(input[2], input[1], 1000, nfft=512)
 @test_approx_eq sXY1 conj(sXY2)
+
+# Test coherence
 c = coherence(input[1], input[2], 1000, nfft=512)
 truth = float64(readdlm(joinpath(testdir, "coherence_mag.txt"), '\t'))
 @test_approx_eq c truth
@@ -77,11 +79,40 @@ signal1 = repeat(cos(x), inner=[1, 1, length(angles)])
 signal2 = cat(3, [cos(x + a) for a in angles]...)
 plv_signals = [signal1 signal2]
 
-coh, plv, ppc = multitaper(plv_signals, (Coherence(), PLV(), PPC()), tapers=ones(period*nperiods))
+coh, plv, ppc, ccor = multitaper(plv_signals, (Coherence(), PLV(), PPC(), CircularCorrelation()), tapers=ones(period*nperiods))
 
 @test_approx_eq coh[band] true_plv
 @test_approx_eq plv[band] true_plv
 @test_approx_eq ppc[band] true_ppc
+@test_approx_eq ccor[band] 0.0
+
+# Test circular correlation
+angles = [
+ -2.386402923969883 0.7120356435187083
+ -1.2179485025557881 -0.5107153930236978
+ 0.28658754714190227 -0.5752672716762053
+ -0.9331371629333169 2.1870089874804917
+ -0.8995711841426721 5.179928197813174
+ 0.8887003244657483 0.5249512145071122
+ -0.9390694729799546 2.1193361160731787
+ 2.4997562944878062 4.444408123844822
+ -0.15260607000620233 0.32401343526930065
+ -1.58821218340456 3.838922093624558
+ 0.3300644770555941 3.612382182527298
+ -0.9159071492390857 1.3286113019566637
+ -1.2527393658061554 1.0733970760561626
+ -4.364282749017247 1.9318390452682834
+ -2.102397073673845 -1.1008030808360818
+]
+
+expi = exp(im*angles)
+
+abar, bbar = angle(sum(expi, 1))
+aabar = sin(angles[:, 1] .- abar)
+bbbar = sin(angles[:, 2] .- bbar)
+true_ccor = sum(aabar.*bbbar)/sqrt(sum(abs2(aabar)).*sum(abs2(bbbar)))
+
+@test_approx_eq applystat(CircularCorrelation(), expi.')[1] true_ccor
 
 # Test NaN handling
 ft1 = mtfft(plv_signals, tapers=ones(period*nperiods))
@@ -93,20 +124,18 @@ expected[5, 2] = applystat(PowerSpectrum(), ft1[:, :, 2:end])[5, 2]
 out = applystat(PowerSpectrum(), ft2)
 @test_approx_eq out expected
 
-out = applystat(CrossSpectrum(), ft2)
-expected = applystat(CrossSpectrum(), ft1)
-expected[5, 1] = applystat(CrossSpectrum(), ft1[:, :, 2:end])[5, 1]
-@test_approx_eq out expected
-
-out = applystat(Coherence(), ft2)
-expected = applystat(Coherence(), ft1)
-expected[5, 1] = applystat(Coherence(), ft1[:, :, 2:end])[5, 1]
-@test_approx_eq out expected
+for stat in (CrossSpectrum, Coherence, PLV)
+	out = applystat(stat(), ft2)
+	expected = applystat(stat(), ft1)
+	expected[5, 1] = applystat(stat(), ft1[:, :, 2:end])[5, 1]
+	@test_approx_eq out expected
+end
 
 ft2[5, 2, :] = NaN
 @test findn(isnan(applystat(PowerSpectrum(), ft2))) == ([5],[2])
-@test findn(isnan(real(applystat(CrossSpectrum(), ft2)))) == ([5],[1])
-@test findn(isnan(applystat(Coherence(), ft2))) == ([5],[1])
+for stat in (CrossSpectrum, Coherence, PLV)
+	@test findn(isnan(real(applystat(stat(), ft2)))) == ([5],[1])
+end
 
 # Test jackknife
 for (stat, trueval) in ((Coherence, coh), (PLV, plv))

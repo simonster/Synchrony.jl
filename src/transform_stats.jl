@@ -18,7 +18,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 export PowerSpectrum, PowerSpectrumVariance, CrossSpectrum, Coherence, Coherency, PLV, PPC, PLI,
-       PLI2Unbiased, WPLI, WPLI2Debiased, ShiftPredictor, Jackknife,
+       PLI2Unbiased, WPLI, WPLI2Debiased, CircularCorrelation, ShiftPredictor, Jackknife,
        allpairs, applystat, permstat, jackknife_bias_var
 
 # Get all pairs of channels
@@ -349,6 +349,59 @@ function finish{T}(s::WPLI2Debiased{T})
         absimcsd = s.x[2, j, i]
         sqimcsd = s.x[3, j, i]
         out[j, i] = (abs2(imcsd) - sqimcsd)/(abs2(absimcsd) - sqimcsd)
+    end
+    out
+end
+
+#
+# Jammalamadaka circular correlation
+#
+# See Jammalamadaka, S. R., & Sengupta, A. (2001). Topics in Circular
+# Statistics. World Scientific, p. 176
+#
+# The algorithm below is a single pass version of the algorithm in the
+# Jammalamadaka & Sengupta. The tests verify that it gives the same
+# result.
+@pairwisestat CircularCorrelation Array{Complex{T},3}
+datasize(s::CircularCorrelation, nout) = (14, nout, size(s.pairs, 2))
+@accumulatebypair CircularCorrelation A j i x y begin
+    xp = x/abs(x)
+    yp = y/abs(y)
+    a = xp*conj(yp)
+    b = xp*yp
+    A[1, j, i] += xp
+    A[2, j, i] += yp
+    A[3, j, i] += a - b
+    A[4, j, i] += a + b
+    A[5, j, i] += xp*xp
+    A[6, j, i] += yp*yp
+end
+
+function finish{T}(s::CircularCorrelation{T})
+    out = zeros(T, size(s.x, 2), size(s.x, 3))
+    x = s.x
+    n = s.n
+    for i = 1:size(out, 2), j = 1:size(out, 1)
+        ni = n[j, i]
+        μ = x[1, j, i]
+        μ /= abs(μ)
+        μ2 = μ*μ
+        υ = x[2, j, i]
+        υ /= abs(υ)
+        υ2 = υ*υ
+        ad = x[3, j, i]
+        bd = x[4, j, i]
+        expi2α = x[5, j, i]
+        expi2β = x[6, j, i]
+        den = (ni - real(μ2)*real(expi2α) - imag(μ2)*imag(expi2α)) *
+              (ni - real(υ2)*real(expi2β) - imag(υ2)*imag(expi2β))
+        # == (ni - real(μ2*expi2α))(ni - real(υ2*expi2β))
+        if den > 0
+            num = (real(υ)*(real(ad)*real(μ) + imag(ad)*imag(μ)) +
+                   imag(υ)*(real(bd)*imag(μ) - imag(bd)*real(μ)))
+            # == real(υ)*real(ad*μ) + imag(υ)*imag(bd*μ)
+            out[j, i] = num/sqrt(den)
+        end
     end
     out
 end
