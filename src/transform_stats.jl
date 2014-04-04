@@ -18,8 +18,8 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 export PowerSpectrum, PowerSpectrumVariance, CrossSpectrum, Coherence, Coherency, PLV, PPC, PLI,
-       PLI2Unbiased, WPLI, WPLI2Debiased, JCircularCorrelation, ShiftPredictor, Jackknife,
-       allpairs, applystat, permstat, jackknife_bias_var
+       PLI2Unbiased, WPLI, WPLI2Debiased, JMCircularCorrelation, JCircularCorrelation,
+       ShiftPredictor, Jackknife, allpairs, applystat, permstat, jackknife_bias_var
 
 # Get all pairs of channels
 function allpairs(n)
@@ -363,7 +363,7 @@ end
 # Jammalamadaka & Sengupta. The tests verify that it gives the same
 # result.
 @pairwisestat JCircularCorrelation Array{Complex{T},3}
-datasize(s::JCircularCorrelation, nout) = (14, nout, size(s.pairs, 2))
+datasize(s::JCircularCorrelation, nout) = (6, nout, size(s.pairs, 2))
 @accumulatebypair JCircularCorrelation A j i x y begin
     xp = x/abs(x)
     yp = y/abs(y)
@@ -385,16 +385,16 @@ function finish{T}(s::JCircularCorrelation{T})
         ni = n[j, i]
         μ = x[1, j, i]
         μ /= abs(μ)
-        μ2 = μ*μ
+        μ² = μ*μ
         υ = x[2, j, i]
         υ /= abs(υ)
-        υ2 = υ*υ
+        υ² = υ*υ
         ad = x[3, j, i]
         bd = x[4, j, i]
         expi2α = x[5, j, i]
         expi2β = x[6, j, i]
-        den = (ni - real(μ2)*real(expi2α) - imag(μ2)*imag(expi2α)) *
-              (ni - real(υ2)*real(expi2β) - imag(υ2)*imag(expi2β))
+        den = (ni - real(μ²)*real(expi2α) - imag(μ²)*imag(expi2α)) *
+              (ni - real(υ²)*real(expi2β) - imag(υ²)*imag(expi2β))
         # == (ni - real(μ2*expi2α))(ni - real(υ2*expi2β))
         if den > 0
             num = (real(υ)*(real(ad)*real(μ) + imag(ad)*imag(μ)) +
@@ -402,6 +402,81 @@ function finish{T}(s::JCircularCorrelation{T})
             # == real(υ)*real(ad*μ) + imag(υ)*imag(bd*μ)
             out[j, i] = num/sqrt(den)
         end
+    end
+    out
+end
+
+#
+# Circular correlation statistic of Jupp and Mardia
+#
+# See Jupp, P. E., & Mardia, K. V. (1980). A General Correlation
+# Coefficient for Directional Data and Related Regression Problems.
+# Biometrika, 67(1), 163–173. doi:10.2307/2335329
+#
+# The formula in terms of correlation coefficients given in the text
+# is slightly wrong. The correct formula is given in:
+#
+# Mardia, K. V., & Jupp, P. E. (2009). Directional Statistics. John
+# Wiley & Sons, p. 249. 
+#
+# Note that the strategy we use here to compute the correlation
+# coefficients is potentially prone to catastrophic cancellation.
+# However, in my simulations, this appears to be stable within the
+# biologically relevant domain. If there are millions of data points or
+# the circular variance is very low, you may be better off computing
+# the circular correlation using canonical correlation directly.
+#
+@pairwisestat JMCircularCorrelation Array{T,3}
+datasize(s::JMCircularCorrelation, nout) = (14, nout, size(s.pairs, 2))
+@accumulatebypair JMCircularCorrelation A j i x y begin
+    xp = x/abs(x)
+    yp = y/abs(y)
+    A[1, j, i] += real(xp)
+    A[2, j, i] += imag(xp)
+    A[3, j, i] += real(yp)
+    A[4, j, i] += imag(yp)
+    A[5, j, i] += real(xp)*real(yp)
+    A[6, j, i] += real(xp)*imag(yp)
+    A[7, j, i] += imag(xp)*real(yp)
+    A[8, j, i] += imag(xp)*imag(yp)
+    A[9, j, i] += real(xp)*imag(xp)
+    A[10, j, i] += real(yp)*imag(yp)
+    A[11, j, i] += abs2(real(xp))
+    A[12, j, i] += abs2(imag(xp))
+    A[13, j, i] += abs2(real(yp))
+    A[14, j, i] += abs2(imag(yp))
+end
+
+corp(n, xy, x, y, x2, y2) = (n*xy - x*y)/sqrt((n*x2 - abs2(x))*(n*y2 - abs2(y)))
+function finish{T}(s::JMCircularCorrelation{T})
+    out = zeros(T, size(s.x, 2), size(s.x, 3))
+    A = s.x
+    n = s.n
+    @inbounds for i = 1:size(out, 2), j = 1:size(out, 1)
+        ni = n[j, i]
+        xc = A[1, j, i]
+        xs = A[2, j, i]
+        yc = A[3, j, i]
+        ys = A[4, j, i]
+        xcyc = A[5, j, i]
+        xcys = A[6, j, i]
+        xsyc = A[7, j, i]
+        xsys = A[8, j, i]
+        xcs = A[9, j, i]
+        ycs = A[10, j, i]
+        xc2 = A[11, j, i]
+        xs2 = A[12, j, i]
+        yc2 = A[13, j, i]
+        ys2 = A[14, j, i]
+        ρcc = corp(ni, xcyc, xc, yc, xc2, yc2)
+        ρcs = corp(ni, xcys, xc, ys, xc2, ys2)
+        ρsc = corp(ni, xsyc, xs, yc, xs2, yc2)
+        ρss = corp(ni, xsys, xs, ys, xs2, ys2)
+        ρ1 = corp(ni, xcs, xc, xs, xc2, xs2)
+        ρ2 = corp(ni, ycs, yc, ys, yc2, ys2)
+        # println((ρcc, ρcs, ρsc, ρss, ρ1, ρ2))
+        out[j, i] = (abs2(ρcc) + abs2(ρcs) + abs2(ρsc) + abs2(ρss) + 2*(ρcc*ρss + ρcs*ρsc)*ρ1*ρ2 -
+                     2*(ρcc*ρcs + ρsc*ρss)*ρ2 - 2(ρcc*ρsc + ρcs*ρss)*ρ1)/((1-abs2(ρ1))*(1-abs2(ρ2)))
     end
     out
 end

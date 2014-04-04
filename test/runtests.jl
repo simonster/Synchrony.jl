@@ -1,4 +1,4 @@
-using Synchrony, NumericExtensions, Base.Test
+using Synchrony, NumericExtensions, StatsBase, Base.Test
 
 const testdir = joinpath(Pkg.dir("Synchrony"), "test")
 
@@ -7,10 +7,10 @@ const testdir = joinpath(Pkg.dir("Synchrony"), "test")
 input = cell(2)
 output = cell(2)
 for i = 1:2
-	input[i] = float64(readdlm(joinpath(testdir, "psd_test$(i)_in.txt"), '\t'))[:]
-	output[i] = psd(input[i], 1000, nfft=512)[:]
-	truth = float64(readdlm(joinpath(testdir, "psd_test$(i)_out.txt"), '\t'))
-	@test_approx_eq output[i] truth
+    input[i] = float64(readdlm(joinpath(testdir, "psd_test$(i)_in.txt"), '\t'))[:]
+    output[i] = psd(input[i], 1000, nfft=512)[:]
+    truth = float64(readdlm(joinpath(testdir, "psd_test$(i)_out.txt"), '\t'))
+    @test_approx_eq output[i] truth
 end
 
 # Ensure that psd gvies the same result when applied across multiple dimensions
@@ -52,21 +52,21 @@ ft = mtfft(varin, 1000, nfft=512)
 
 # Test PLV and PPC
 angles = [
-	2.439564585801219,
-	3.0190627944596296,
-	1.9558533611578697,
-	2.9276497655265747,
-	-2.668278147116921,
-	2.9670038532462017,
-	-2.489899551868197,
-	-2.7098277543134612,
-	-2.0699115143373175,
-	-1.6574845096744018,
-	-1.7483177390187856,
-	3.0954095279265252,
-	2.8604385096072225,
-	-3.04237881355147,
-	2.6904076043411562
+    2.439564585801219,
+    3.0190627944596296,
+    1.9558533611578697,
+    2.9276497655265747,
+    -2.668278147116921,
+    2.9670038532462017,
+    -2.489899551868197,
+    -2.7098277543134612,
+    -2.0699115143373175,
+    -1.6574845096744018,
+    -1.7483177390187856,
+    3.0954095279265252,
+    2.8604385096072225,
+    -3.04237881355147,
+    2.6904076043411562
 ]
 true_plv = abs(mean(exp(im*angles)))
 true_ppc = 1-var(exp(im*angles)) # yep.
@@ -79,7 +79,9 @@ signal1 = repeat(cos(x), inner=[1, 1, length(angles)])
 signal2 = cat(3, [cos(x + a) for a in angles]...)
 plv_signals = [signal1 signal2]
 
-coh, plv, ppc, ccor = multitaper(plv_signals, (Coherence(), PLV(), PPC(), JCircularCorrelation()), tapers=ones(period*nperiods))
+coh, plv, ppc, ccor = multitaper(plv_signals, (Coherence(), PLV(), PPC(),
+                                               JCircularCorrelation()),
+                                        tapers=ones(period*nperiods))
 
 @test_approx_eq coh[band] true_plv
 @test_approx_eq plv[band] true_plv
@@ -104,6 +106,8 @@ angles = [
  -4.364282749017247 1.9318390452682834
  -2.102397073673845 -1.1008030808360818
 ]
+# adiff = randn(1000000)
+# angles = [randn(1000000).+adiff randn(1000000).+adiff.+pi/2]
 
 expi = exp(im*angles)
 
@@ -113,6 +117,20 @@ bbbar = sin(angles[:, 2] .- bbar)
 true_ccor = sum(aabar.*bbbar)/sqrt(sum(abs2(aabar)).*sum(abs2(bbbar)))
 
 @test_approx_eq applystat(JCircularCorrelation(), expi.')[1] true_ccor
+
+# Test Jupp and Mardia circular correlation
+am = [real(expi[:, 1]) imag(expi[:, 1])]
+bm = [real(expi[:, 2]) imag(expi[:, 2])]
+(A, B, r) = canoncor(am, bm)
+true_ccor = sum(abs2(r))
+
+# println((cor(real(expi[:, 1]), real(expi[:, 2])),
+#          cor(real(expi[:, 1]), imag(expi[:, 2])),
+#          cor(imag(expi[:, 1]), real(expi[:, 2])),
+#          cor(imag(expi[:, 1]), imag(expi[:, 2])),
+#          cor(real(expi[:, 1]), imag(expi[:, 1])),
+#          cor(real(expi[:, 2]), imag(expi[:, 2]))))
+@test_approx_eq applystat(JMCircularCorrelation(), expi.')[1] true_ccor
 
 # Test NaN handling
 ft1 = mtfft(plv_signals, tapers=ones(period*nperiods))
@@ -125,55 +143,55 @@ out = applystat(PowerSpectrum(), ft2)
 @test_approx_eq out expected
 
 for stat in (CrossSpectrum, Coherence, PLV)
-	out = applystat(stat(), ft2)
-	expected = applystat(stat(), ft1)
-	expected[5, 1] = applystat(stat(), ft1[:, :, 2:end])[5, 1]
-	@test_approx_eq out expected
+    out = applystat(stat(), ft2)
+    expected = applystat(stat(), ft1)
+    expected[5, 1] = applystat(stat(), ft1[:, :, 2:end])[5, 1]
+    @test_approx_eq out expected
 end
 
 ft2[5, 2, :] = NaN
 @test findn(isnan(applystat(PowerSpectrum(), ft2))) == ([5],[2])
 for stat in (CrossSpectrum, Coherence, PLV)
-	@test findn(isnan(real(applystat(stat(), ft2)))) == ([5],[1])
+    @test findn(isnan(real(applystat(stat(), ft2)))) == ([5],[1])
 end
 
 # Test jackknife
 for (stat, trueval) in ((Coherence, coh), (PLV, plv))
-	jn = multitaper(plv_signals, Jackknife(stat()), tapers=ones(period*nperiods))
-	(bias, variance) = jackknife_bias_var(jn...)
-	@test_approx_eq jn[1] trueval
-	estimates = zeros(size(plv, 1), size(plv, 2), size(plv_signals, 3))
-	for i = 1:size(plv_signals, 3)
-		estimates[:, :, i] = multitaper(plv_signals[:, :, [1:i-1, i+1:size(plv_signals,3)]],
-			                            stat(), tapers=ones(period*nperiods))
-	end
-	@test_approx_eq bias (size(plv_signals, 3)-1)*(mean(estimates, 3) - trueval)
-	@test_approx_eq variance sum(abs2(estimates .- mean(estimates, 3)), 3)*(size(plv_signals, 3)-1)/size(plv_signals, 3)
+    jn = multitaper(plv_signals, Jackknife(stat()), tapers=ones(period*nperiods))
+    (bias, variance) = jackknife_bias_var(jn...)
+    @test_approx_eq jn[1] trueval
+    estimates = zeros(size(plv, 1), size(plv, 2), size(plv_signals, 3))
+    for i = 1:size(plv_signals, 3)
+        estimates[:, :, i] = multitaper(plv_signals[:, :, [1:i-1, i+1:size(plv_signals,3)]],
+                                        stat(), tapers=ones(period*nperiods))
+    end
+    @test_approx_eq bias (size(plv_signals, 3)-1)*(mean(estimates, 3) - trueval)
+    @test_approx_eq variance sum(abs2(estimates .- mean(estimates, 3)), 3)*(size(plv_signals, 3)-1)/size(plv_signals, 3)
 end
 
 # Test shift predictor
 x = 0:63
 signal = zeros(length(x), 1, 35)
 for i = 1:size(signal, 3)
-	signal[:, 1, i] = cospi(0.2*x+rand()*2)
+    signal[:, 1, i] = cospi(0.2*x+rand()*2)
 end
 c = multitaper([signal signal], Coherence())
 @test_approx_eq c ones(size(c))
 for lag = 1:5
-	t = multitaper([signal signal[:, :, circshift([1:size(signal, 3)], lag)]], Coherence())
-	sp = multitaper([signal signal], ShiftPredictor(Coherence(), lag))
-	@test_approx_eq t sp
+    t = multitaper([signal signal[:, :, circshift([1:size(signal, 3)], lag)]], Coherence())
+    sp = multitaper([signal signal], ShiftPredictor(Coherence(), lag))
+    @test_approx_eq t sp
 end
 
 # Test jackknifed shift predictor
 for stat in (Coherence, PLV), lag = 1:5
-	t = multitaper([signal signal[:, :, circshift([1:size(signal, 3)], lag)]], Jackknife(stat()))
-	sp = multitaper([signal signal], Jackknife(ShiftPredictor(stat(), lag)))
-	@test_approx_eq t[1] sp[1]
-	(tbias, tvar) = jackknife_bias_var(t...)
-	(spbias, spvar) = jackknife_bias_var(sp...)
-	@test_approx_eq tbias spbias
-	@test_approx_eq tvar spvar
+    t = multitaper([signal signal[:, :, circshift([1:size(signal, 3)], lag)]], Jackknife(stat()))
+    sp = multitaper([signal signal], Jackknife(ShiftPredictor(stat(), lag)))
+    @test_approx_eq t[1] sp[1]
+    (tbias, tvar) = jackknife_bias_var(t...)
+    (spbias, spvar) = jackknife_bias_var(sp...)
+    @test_approx_eq tbias spbias
+    @test_approx_eq tvar spvar
 end
 
 # Test permutations
@@ -210,10 +228,10 @@ d1 = cwt(test_in, MorletWavelet(foi, 5))
 d2 = complex(float64(readdlm(joinpath(testdir, "wavelet_test_out_re.txt"), '\t')), float64(readdlm(joinpath(testdir, "wavelet_test_out_im.txt"), '\t')))
 coi_periods = float64(readdlm(joinpath(testdir, "wavelet_test_coi.txt"))[:])
 for j = 1:length(foi)
-	period = 1/foi[j]
-	for i = 1:length(coi_periods)
-		@test isnan(real(d1[i, j])) == (1/foi[j] > coi_periods[i])
-	end
+    period = 1/foi[j]
+    for i = 1:length(coi_periods)
+        @test isnan(real(d1[i, j])) == (1/foi[j] > coi_periods[i])
+    end
 end
 d2[isnan(real(d1))] = NaN
 @test_approx_eq d1 d2
@@ -230,15 +248,15 @@ z1 = cwt(y, w, 1000)
 y[500] = NaN
 z2 = cwt(y, w, 1000)
 for k = 1:length(foi), i = 1:length(y)
-	@test isnan(real(z2[i, k])) == (i <= cois[k] || i >= length(y) - cois[k] + 1 ||
-		                            500 - cois[k] <= i <= 500 + cois[k])
+    @test isnan(real(z2[i, k])) == (i <= cois[k] || i >= length(y) - cois[k] + 1 ||
+                                    500 - cois[k] <= i <= 500 + cois[k])
 end
 @test_approx_eq z1[!isnan(real(z2))] z2[!isnan(real(z2))]
 y[501] = NaN
 z2 = cwt(y, w, 1000)
 for k = 1:length(foi), i = 1:length(y)
-	@test isnan(real(z2[i, k])) == (i <= cois[k] || i >= length(y) - cois[k] + 1 ||
-		                            500 - cois[k] <= i <= 501 + cois[k])
+    @test isnan(real(z2[i, k])) == (i <= cois[k] || i >= length(y) - cois[k] + 1 ||
+                                    500 - cois[k] <= i <= 501 + cois[k])
 end
 @test_approx_eq z1[!isnan(real(z2))] z2[!isnan(real(z2))]
 
