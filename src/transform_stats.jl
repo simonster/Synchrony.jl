@@ -18,7 +18,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 export PowerSpectrum, PowerSpectrumVariance, CrossSpectrum, Coherence, Coherency, PLV, PPC, PLI,
-       PLI2Unbiased, WPLI, WPLI2Debiased, CircularCorrelation, ShiftPredictor, Jackknife,
+       PLI2Unbiased, WPLI, WPLI2Debiased, JCircularCorrelation, ShiftPredictor, Jackknife,
        allpairs, applystat, permstat, jackknife_bias_var
 
 # Get all pairs of channels
@@ -362,9 +362,9 @@ end
 # The algorithm below is a single pass version of the algorithm in
 # Jammalamadaka & Sengupta. The tests verify that it gives the same
 # result.
-@pairwisestat CircularCorrelation Array{Complex{T},3}
-datasize(s::CircularCorrelation, nout) = (14, nout, size(s.pairs, 2))
-@accumulatebypair CircularCorrelation A j i x y begin
+@pairwisestat JCircularCorrelation Array{Complex{T},3}
+datasize(s::JCircularCorrelation, nout) = (14, nout, size(s.pairs, 2))
+@accumulatebypair JCircularCorrelation A j i x y begin
     xp = x/abs(x)
     yp = y/abs(y)
     a = xp*conj(yp)
@@ -377,7 +377,7 @@ datasize(s::CircularCorrelation, nout) = (14, nout, size(s.pairs, 2))
     A[6, j, i] += yp*yp
 end
 
-function finish{T}(s::CircularCorrelation{T})
+function finish{T}(s::JCircularCorrelation{T})
     out = zeros(T, size(s.x, 2), size(s.x, 3))
     x = s.x
     n = s.n

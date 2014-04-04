@@ -79,14 +79,14 @@ signal1 = repeat(cos(x), inner=[1, 1, length(angles)])
 signal2 = cat(3, [cos(x + a) for a in angles]...)
 plv_signals = [signal1 signal2]
 
-coh, plv, ppc, ccor = multitaper(plv_signals, (Coherence(), PLV(), PPC(), CircularCorrelation()), tapers=ones(period*nperiods))
+coh, plv, ppc, ccor = multitaper(plv_signals, (Coherence(), PLV(), PPC(), JCircularCorrelation()), tapers=ones(period*nperiods))
 
 @test_approx_eq coh[band] true_plv
 @test_approx_eq plv[band] true_plv
 @test_approx_eq ppc[band] true_ppc
 @test_approx_eq ccor[band] 0.0
 
-# Test circular correlation
+# Test Jammalamadaka circular correlation
 angles = [
  -2.386402923969883 0.7120356435187083
  -1.2179485025557881 -0.5107153930236978
@@ -112,7 +112,7 @@ aabar = sin(angles[:, 1] .- abar)
 bbbar = sin(angles[:, 2] .- bbar)
 true_ccor = sum(aabar.*bbbar)/sqrt(sum(abs2(aabar)).*sum(abs2(bbbar)))
 
-@test_approx_eq applystat(CircularCorrelation(), expi.')[1] true_ccor
+@test_approx_eq applystat(JCircularCorrelation(), expi.')[1] true_ccor
 
 # Test NaN handling
 ft1 = mtfft(plv_signals, tapers=ones(period*nperiods))
