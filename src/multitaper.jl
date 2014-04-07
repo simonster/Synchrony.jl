@@ -107,7 +107,7 @@ function mtfft{T<:Real}(A::Union(AbstractVector{T}, AbstractMatrix{T}, AbstractA
             fftin[l, k] = A[l, k, j]*tapers[l, i]
         end
 
-        iout = view(fftout, :, :, i, j)
+        iout = pointer_to_array(pointer(fftout, nout*nchannels*((i-1)+ntapers*(j-1))+1), (nout, nchannels))
         FFTW.execute(p.plan, fftin, iout)
 
         # Copy FFT from one buffer to another. See note above.

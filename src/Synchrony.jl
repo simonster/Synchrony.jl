@@ -18,7 +18,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 module Synchrony
-using DSP, NumericExtensions, ArrayViews
+using DSP, NumericExtensions
 
 export frequencies
 
