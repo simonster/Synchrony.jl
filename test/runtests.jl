@@ -1,4 +1,4 @@
-using Synchrony, NumericExtensions, StatsBase, Base.Test
+using Synchrony, NumericExtensions, StatsBase, CrossDecomposition, Base.Test
 
 const testdir = joinpath(Pkg.dir("Synchrony"), "test")
 
@@ -121,8 +121,7 @@ true_ccor = sum(aabar.*bbbar)/sqrt(sum(abs2(aabar)).*sum(abs2(bbbar)))
 # Test Jupp and Mardia circular correlation
 am = [real(expi[:, 1]) imag(expi[:, 1])]
 bm = [real(expi[:, 2]) imag(expi[:, 2])]
-(A, B, r) = canoncor(am, bm)
-true_ccor = sum(abs2(r))
+true_ccor = sum(abs2(cor(canoncor(am, bm))))
 
 # println((cor(real(expi[:, 1]), real(expi[:, 2])),
 #          cor(real(expi[:, 1]), imag(expi[:, 2])),
@@ -230,11 +229,30 @@ coi_periods = float64(readdlm(joinpath(testdir, "wavelet_test_coi.txt"))[:])
 for j = 1:length(foi)
     period = 1/foi[j]
     for i = 1:length(coi_periods)
-        @test isnan(real(d1[i, j])) == (1/foi[j] > coi_periods[i])
+        @test isnan(real(d1[i, j])) == (period > coi_periods[i]) || abs(period - coi_periods[i]) <= eps(coi_periods[i])
     end
 end
 d2[isnan(real(d1))] = NaN
 @test_approx_eq d1 d2
+
+# Test tstd
+for w in (MorletWavelet([0.00001]), MorseWavelet([0.00001], 8, 3))
+    wb = [wavebases(w, 1000000, 1); zeros(499999)]
+    p = abs2(ifftshift(bfft(wb)))
+    x = 1:length(p)
+    μ = sum(p.*x)
+    σ = sqrt(sum(p.*abs2(x.-μ)))
+    @test_approx_eq_eps σ tstd(w) σ*1e-5
+end
+
+# Test fstd
+for w in (MorletWavelet([0.25]), MorseWavelet([0.25], 8, 3))
+    x = frequencies(100000)[1]
+    wb = abs2(wavebases(w, 100000, 1))*100000
+    μ = sum(wb.*x)/sum(wb)
+    σ = sqrt(sum(wb.*abs2(x.-μ)))
+    @test_approx_eq_eps σ fstd(w) σ*1e-5
+end
 
 # Test missing data handling in wavelet transform
 y = ones(1000)
@@ -243,7 +261,7 @@ y[500] = 1/3
 y[501] = 2/3
 foi = 2.^(0:0.25:7)
 w = MorletWavelet(foi, 5)
-cois = iceil(wavecoi(w, 1000))
+cois = iceil(tstd(w, 1000)*2)
 z1 = cwt(y, w, 1000)
 y[500] = NaN
 z2 = cwt(y, w, 1000)

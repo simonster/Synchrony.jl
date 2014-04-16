@@ -18,7 +18,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import Base: getindex, size, ndims, convert
-export MorletWavelet, MorseWavelet, wavebases, wavecoi, ContinuousWaveletTransform, cwt
+export MorletWavelet, MorseWavelet, wavebases, fstd, tstd, ContinuousWaveletTransform, cwt
 
 #
 # Mother wavelets, which are convolved with the signal in frequency space
@@ -38,12 +38,12 @@ immutable MorletWavelet{T} <: MotherWavelet{T}
     fourierfactor::T
 end
 MorletWavelet{T<:Real}(freq::Vector{T}, k0::Real=5.0) =
-    MorletWavelet(freq, convert(T, k0), convert(T, (4pi)/(k0 + sqrt(2 + k0^2))))
+    MorletWavelet(freq, convert(T, k0), convert(T, (4π)/(k0 + sqrt(2 + k0^2))))
 
 # Generate daughter wavelet (samples x frequencies)
 function wavebases{T}(w::MorletWavelet{T}, n::Int, fs::Real=1)
-    df = 2pi * fs / n
-    normconst = sqrt(df) / sqrt(sqrt(pi) * n)
+    df = 2π * fs / n
+    normconst = sqrt(df) / sqrt(sqrt(π) * n)
     k0 = w.k0
 
     bases = Array(T, div(n, 2)+1, length(w.freq))
@@ -60,12 +60,11 @@ function wavebases{T}(w::MorletWavelet{T}, n::Int, fs::Real=1)
     bases
 end
 
-# We use 2 x wavelet's sigma in the time domain for the COI. For the
-# Morlet wavelet, this is the same as the e folding time used by
-# Torrence & Compo.
-function wavecoi{T}(w::MorletWavelet{T}, fs::Real=1)
-    [sqrt(2) * fs / (f * w.fourierfactor) for f in w.freq]
-end
+fourierfactor{T}(w::MorletWavelet{T}) = w.fourierfactor
+fstd{T}(w::MorletWavelet{T}, fs::Real=1) =
+    [(f * w.fourierfactor) / (sqrt(2) * 2π * fs) for f in w.freq]
+tstd{T}(w::MorletWavelet{T}, fs::Real=1) =
+    [fs / (sqrt(2) * f * w.fourierfactor) for f in w.freq]
 
 # Generalized Morse wavelet (first family only). See:
 # Olhede, S. C., & Walden, A. T. (2002). Generalized Morse wavelets.
@@ -93,10 +92,10 @@ function wavebases{T}(w::MorseWavelet{T}, n::Int, fs::Real=1)
     ωs = (β/γ)^(1/γ)
     dω0 = fs / n * ωs
     # Olhede & Walden p. 2663, multiplied by sqrt(ωs/(2*pi*f)) for the
-    # frequency with an additional correction by 1/sqrt(n) for the
+    # frequency with an additional correction by 1/n for the
     # unnormalized inverse FFT
     r = (2β+1)/γ
-    α0 = 2^(r/2)*sqrt(γ*ωs)/sqrt(gamma(r)*n)
+    α0 = 2^(r/2)*sqrt(γ*ωs)/(sqrt(gamma(r))*n)
 
     bases = Array(T, div(n, 2)+1, length(w.freq))
     for k = 1:length(w.freq)
@@ -112,15 +111,27 @@ function wavebases{T}(w::MorseWavelet{T}, n::Int, fs::Real=1)
     bases
 end
 
-gammatil(x) = gamma(x)/2^x
-function wavecoi{T}(w::MorseWavelet{T}, fs::Real=1)
+# Fourier factor based on peak frequency
+fourierfactor{T}(w::MorseWavelet{T}) = 2*pi*(w.β/w.γ)^(-1/w.γ)
+function fstd{T}(w::MorseWavelet{T}, fs::Real=1)
     γ = w.γ
     β = w.β
-    fourierfactor = 2*pi/(β/γ)^(1/γ)
-    sigmaT = sqrt((β^2*gammatil((2β-1)/γ)+γ^2*
-                  gammatil((2β+2*γ-1)/γ)-2β*γ*
-                  gammatil((2β+γ-1)/γ))/gammatil((2*β+1)/γ))
-    [(2 * fs * sigmaT) / (f * fourierfactor) for f in w.freq]
+    ff = fourierfactor(w)
+    σ = sqrt(2^(-2/γ)*(exp(lgamma((2*β+3)/γ)-
+                           lgamma((2*β+1)/γ)) -
+                       exp(2*(lgamma((2*β+2)/γ)-
+                              lgamma((2*β+1)/γ)))))
+    [(f * ff * σ) / (2 * pi * fs) for f in w.freq]
+end
+gammatil(x) = gamma(x)/2^x
+function tstd{T}(w::MorseWavelet{T}, fs::Real=1)
+    γ = w.γ
+    β = w.β
+    ff = fourierfactor(w)
+    σ = sqrt((β^2*gammatil((2β-1)/γ)+γ^2*
+             gammatil((2β+2*γ-1)/γ)-2β*γ*
+             gammatil((2β+γ-1)/γ))/gammatil((2β+1)/γ))
+    [(fs * σ) / (f * ff) for f in w.freq]
 end
 
 #
@@ -136,24 +147,26 @@ immutable ContinuousWaveletTransform{T,S}
     p2::FFTW.Plan{S}
 end
 
-function ContinuousWaveletTransform{T}(w::MotherWavelet{T}, nfft::Int, fs::Real=1)
+function ContinuousWaveletTransform{T}(w::MotherWavelet{T}, nfft::Int, fs::Real=1;
+                                       coi::Vector=scale!(tstd(w, fs), 2))
     fftin = Array(T, nfft)
     fftout = zeros(Complex{T}, div(nfft, 2)+1)
     ifftwork = zeros(Complex{T}, nfft)
     bases = wavebases(w, nfft, fs)
-    coi = wavecoi(w, fs)
+    length(coi) == size(bases, 2) || isempty(coi) || error("length of coi must match number of frequencies")
     p1 = FFTW.Plan(fftin, fftout, 1, FFTW.ESTIMATE, FFTW.NO_TIMELIMIT)
     p2 = FFTW.Plan(ifftwork, ifftwork, 1, FFTW.BACKWARD, FFTW.ESTIMATE, FFTW.NO_TIMELIMIT)
     ContinuousWaveletTransform(fftin, fftout, ifftwork, bases, coi, p1, p2)
 end
 
 function evaluate!{T,S<:FloatingPoint}(out::Array{Complex{S}, 2}, t::ContinuousWaveletTransform{T},
-                                       signal::Vector{T}; nancoi::Bool=true)
+                                       signal::Vector{T})
     @inbounds begin
         fftin = t.fftin
         fftout = t.fftout
         ifftwork = t.ifftwork
         bases = t.bases
+        coi = t.coi
 
         nsignal = length(signal)
         nfft = length(fftin)
@@ -232,9 +245,9 @@ function evaluate!{T,S<:FloatingPoint}(out::Array{Complex{S}, 2}, t::ContinuousW
             # Copy to output array
             copy!(out, nsignal*(k-1)+1, ifftwork, 1, nsignal)
 
-            if nancoi
+            if !isempty(coi)
                 # Set NaNs at edges
-                coi_length = iceil(t.coi[k])
+                coi_length = iceil(coi[k])
                 out[1:min(coi_length, nsignal), k] = NaN
                 out[max(nsignal-coi_length+1, 1):end, k] = NaN
 
@@ -255,7 +268,7 @@ function evaluate!{T,S<:FloatingPoint}(out::Array{Complex{S}, 2}, t::ContinuousW
 end
 
 # Friendly interface to ContinuousWaveletTransform
-function cwt{T <: Real}(signal::Vector{T}, w::MotherWavelet, fs::Real=1; nancoi::Bool=true)
+function cwt{T <: Real}(signal::Vector{T}, w::MotherWavelet, fs::Real=1)
     t = ContinuousWaveletTransform(w, nextfastfft(length(signal)), fs)
-    evaluate!(Array(Complex{T}, length(signal), size(t.bases, 2)), t, signal; nancoi=nancoi)
+    evaluate!(Array(Complex{T}, length(signal), size(t.bases, 2)), t, signal)
 end
