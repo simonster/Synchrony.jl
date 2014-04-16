@@ -1,4 +1,4 @@
-using Synchrony, NumericExtensions, StatsBase, CrossDecomposition, Base.Test
+using Synchrony, NumericExtensions, CrossDecomposition, Base.Test
 
 const testdir = joinpath(Pkg.dir("Synchrony"), "test")
 
