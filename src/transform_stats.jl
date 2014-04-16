@@ -447,13 +447,21 @@ datasize(s::JMCircularCorrelation, nout) = (14, nout, size(s.pairs, 2))
     A[14, j, i] += abs2(imag(yp))
 end
 
-corp(n, xy, x, y, x2, y2) = (n*xy - x*y)/sqrt((n*x2 - abs2(x))*(n*y2 - abs2(y)))
+function corp(n, xy, x, y, x2, y2)
+    num = (n*xy - x*y)
+    den = (n*x2 - abs2(x))*(n*y2 - abs2(y))
+    (num/sqrt(den), abs2(num)/den)
+end
 function finish{T}(s::JMCircularCorrelation{T})
     out = zeros(T, size(s.x, 2), size(s.x, 3))
     A = s.x
     n = s.n
     @inbounds for i = 1:size(out, 2), j = 1:size(out, 1)
         ni = n[j, i]
+        if ni <= 1
+            out[j, i] = nan(T)
+            continue
+        end
         xc = A[1, j, i]
         xs = A[2, j, i]
         yc = A[3, j, i]
@@ -468,15 +476,14 @@ function finish{T}(s::JMCircularCorrelation{T})
         xs2 = A[12, j, i]
         yc2 = A[13, j, i]
         ys2 = A[14, j, i]
-        ρcc = corp(ni, xcyc, xc, yc, xc2, yc2)
-        ρcs = corp(ni, xcys, xc, ys, xc2, ys2)
-        ρsc = corp(ni, xsyc, xs, yc, xs2, yc2)
-        ρss = corp(ni, xsys, xs, ys, xs2, ys2)
-        ρ1 = corp(ni, xcs, xc, xs, xc2, xs2)
-        ρ2 = corp(ni, ycs, yc, ys, yc2, ys2)
-        # println((ρcc, ρcs, ρsc, ρss, ρ1, ρ2))
-        out[j, i] = (abs2(ρcc) + abs2(ρcs) + abs2(ρsc) + abs2(ρss) + 2*(ρcc*ρss + ρcs*ρsc)*ρ1*ρ2 -
-                     2*(ρcc*ρcs + ρsc*ρss)*ρ2 - 2(ρcc*ρsc + ρcs*ρss)*ρ1)/((1-abs2(ρ1))*(1-abs2(ρ2)))
+        (ρcc, ρcc²) = corp(ni, xcyc, xc, yc, xc2, yc2)
+        (ρcs, ρcs²) = corp(ni, xcys, xc, ys, xc2, ys2)
+        (ρsc, ρsc²) = corp(ni, xsyc, xs, yc, xs2, yc2)
+        (ρss, ρss²) = corp(ni, xsys, xs, ys, xs2, ys2)
+        (ρ1, ρ1²) = corp(ni, xcs, xc, xs, xc2, xs2)
+        (ρ2, ρ2²) = corp(ni, ycs, yc, ys, yc2, ys2)
+        out[j, i] = (ρcc² + ρcs² + ρsc² + ρss² + 2*(ρcc*ρss + ρcs*ρsc)*ρ1*ρ2 -
+                     2*(ρcc*ρcs + ρsc*ρss)*ρ2 - 2(ρcc*ρsc + ρcs*ρss)*ρ1)/((1-ρ1²)*(1-ρ2²))
     end
     out
 end
