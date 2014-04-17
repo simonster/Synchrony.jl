@@ -61,10 +61,12 @@ function wavebases{T}(w::MorletWavelet{T}, n::Int, fs::Real=1)
 end
 
 fourierfactor{T}(w::MorletWavelet{T}) = w.fourierfactor
-fstd{T}(w::MorletWavelet{T}, fs::Real=1) =
-    [(f * w.fourierfactor) / (sqrt(2) * 2π * fs) for f in w.freq]
-tstd{T}(w::MorletWavelet{T}, fs::Real=1) =
-    [fs / (sqrt(2) * f * w.fourierfactor) for f in w.freq]
+# std in the frequency domain, in units of Hz
+fstd{T}(w::MorletWavelet{T}) =
+    [(f * w.fourierfactor) / (sqrt(2) * 2π) for f in w.freq]
+# std in the time domain, in units of time
+tstd{T}(w::MorletWavelet{T}) =
+    [1 / (sqrt(2) * f * w.fourierfactor) for f in w.freq]
 
 # Generalized Morse wavelet (first family only). See:
 # Olhede, S. C., & Walden, A. T. (2002). Generalized Morse wavelets.
@@ -95,7 +97,7 @@ function wavebases{T}(w::MorseWavelet{T}, n::Int, fs::Real=1)
     # frequency with an additional correction by 1/n for the
     # unnormalized inverse FFT
     r = (2β+1)/γ
-    α0 = 2^(r/2)*sqrt(γ*ωs)/(sqrt(gamma(r))*n)
+    α0 = 2^(r/2)*sqrt(γ*ωs*fs)/(sqrt(gamma(r))*n)
 
     bases = Array(T, div(n, 2)+1, length(w.freq))
     for k = 1:length(w.freq)
@@ -113,7 +115,7 @@ end
 
 # Fourier factor based on peak frequency
 fourierfactor{T}(w::MorseWavelet{T}) = 2*pi*(w.β/w.γ)^(-1/w.γ)
-function fstd{T}(w::MorseWavelet{T}, fs::Real=1)
+function fstd{T}(w::MorseWavelet{T})
     γ = w.γ
     β = w.β
     ff = fourierfactor(w)
@@ -121,17 +123,17 @@ function fstd{T}(w::MorseWavelet{T}, fs::Real=1)
                            lgamma((2*β+1)/γ)) -
                        exp(2*(lgamma((2*β+2)/γ)-
                               lgamma((2*β+1)/γ)))))
-    [(f * ff * σ) / (2 * pi * fs) for f in w.freq]
+    [(f * ff * σ) / (2 * pi) for f in w.freq]
 end
 gammatil(x) = gamma(x)/2^x
-function tstd{T}(w::MorseWavelet{T}, fs::Real=1)
+function tstd{T}(w::MorseWavelet{T})
     γ = w.γ
     β = w.β
     ff = fourierfactor(w)
     σ = sqrt((β^2*gammatil((2β-1)/γ)+γ^2*
              gammatil((2β+2*γ-1)/γ)-2β*γ*
              gammatil((2β+γ-1)/γ))/gammatil((2β+1)/γ))
-    [(fs * σ) / (f * ff) for f in w.freq]
+    [(σ) / (f * ff) for f in w.freq]
 end
 
 #
@@ -148,7 +150,7 @@ immutable ContinuousWaveletTransform{T,S}
 end
 
 function ContinuousWaveletTransform{T}(w::MotherWavelet{T}, nfft::Int, fs::Real=1;
-                                       coi::Vector=scale!(tstd(w, fs), 2))
+                                       coi::Vector=scale!(tstd(w), 2*fs))
     fftin = Array(T, nfft)
     fftout = zeros(Complex{T}, div(nfft, 2)+1)
     ifftwork = zeros(Complex{T}, nfft)

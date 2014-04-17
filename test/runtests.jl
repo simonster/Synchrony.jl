@@ -236,21 +236,21 @@ d2[isnan(real(d1))] = NaN
 @test_approx_eq d1 d2
 
 # Test tstd
-for w in (MorletWavelet([0.00001]), MorseWavelet([0.00001], 8, 3))
-    wb = [wavebases(w, 1000000, 1); zeros(499999)]
+for w in (MorletWavelet([0.0003]), MorseWavelet([0.0003], 8, 3))
+    wb = [wavebases(w, 100000, 3); zeros(49999)]
     p = abs2(ifftshift(bfft(wb)))
-    x = 1:length(p)
+    x = (0:length(p)-1)/3
     μ = sum(p.*x)
     σ = sqrt(sum(p.*abs2(x.-μ)))
     @test_approx_eq_eps σ tstd(w) σ*1e-5
 end
 
 # Test fstd
-for w in (MorletWavelet([0.25]), MorseWavelet([0.25], 8, 3))
-    x = frequencies(100000)[1]
-    wb = abs2(wavebases(w, 100000, 1))*100000
-    μ = sum(wb.*x)/sum(wb)
-    σ = sqrt(sum(wb.*abs2(x.-μ)))
+for w in (MorletWavelet([0.75]), MorseWavelet([0.75], 8, 3))
+    x = frequencies(100000, 3)[1]
+    p = abs2(wavebases(w, 100000, 3))*100000
+    μ = sum(p.*x)
+    σ = sqrt(sum(p.*abs2(x.-μ)))
     @test_approx_eq_eps σ fstd(w) σ*1e-5
 end
 
@@ -261,7 +261,7 @@ y[500] = 1/3
 y[501] = 2/3
 foi = 2.^(0:0.25:7)
 w = MorletWavelet(foi, 5)
-cois = iceil(tstd(w, 1000)*2)
+cois = iceil(tstd(w)*2*1000)
 z1 = cwt(y, w, 1000)
 y[500] = NaN
 z2 = cwt(y, w, 1000)
