@@ -1,7 +1,8 @@
 tests = [
     "multitaper",
     "transform_stats",
-    "wavelet"
+    "wavelet",
+    "point_field"
 ]
 
 println("Running tests:")
@@ -11,6 +12,4 @@ for t in tests
     include("$t.jl")
 end
 
-# TODO PLI, PLI2Unbiased, WPLI, WPLI2Debiased,
-#      spiketriggeredspectrum, pfcoherence, pfplv, pfppc0, pfppc1,
-#      pfppc2
+# TODO point field tests

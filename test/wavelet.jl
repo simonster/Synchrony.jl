@@ -72,8 +72,3 @@ for k = 1:length(foi), i = 1:length(y)
                                     500 - cois[k] <= i <= 501 + cois[k])
 end
 @test_approx_eq z1[!isnan(real(z2))] z2[!isnan(real(z2))]
-
-# Test pxcorr
-x = [rand() > 0.5 for i = 1:50]
-y = [rand() > 0.5 for i = 1:50]
-@test_approx_eq xcorr(x, y) pxcorr(find(x), find(y), -49:49)

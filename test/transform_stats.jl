@@ -1,6 +1,6 @@
 using Synchrony, NumericExtensions, Base.Test, CrossDecomposition
 
-# Test PLV and PPC
+# Tests for statistics determined by cross spectrum
 angles = [
     2.439564585801219,
     3.0190627944596296,
@@ -18,24 +18,60 @@ angles = [
     -3.04237881355147,
     2.6904076043411562
 ]
-true_plv = abs(mean(exp(im*angles)))
-true_ppc = 1-var(exp(im*angles)) # yep.
+r = [
+    0.5222318110603368,
+    0.29671462136718185,
+    0.0766100484932224,
+    1.3353190416626122,
+    1.2002648555961346,
+    1.0636420608553432,
+    1.745582800792132,
+    0.7810048670915002,
+    1.5825305843214879,
+    1.3754091313969945,
+    1.997253024492295,
+    1.239976187334439,
+    1.4558221123423296,
+    1.6855505422703576,
+    0.6713539625790665
+]
+
+expangles = exp(im*angles)
+expcoef = r.*expangles
+true_coh = abs(mean(expcoef))./sqrt(mean(abs2(r)))
+true_plv = abs(mean(expangles))
+true_ppc = 1-var(expangles)
+true_pli = mean(sign(angles))
+true_pli2unbiased = (length(angles)*abs2(mean(sign(angles)))-1)/(length(angles)-1)
+true_wpli = abs(mean(imag(expcoef)))./mean(abs(imag(expcoef)))
+pairs = Float64[]
+for i1 = 1:length(angles), i2 = 1:length(angles)
+    i1 != i2 || continue
+    push!(pairs, imag(expcoef[i1])*imag(expcoef[i2]))
+end
+true_wpli2debiased = mean(pairs)./mean(abs(pairs))
 
 period = 32
 nperiods = 16
 band = nperiods + 1
 x = (0:2/period:2*nperiods-2/period)*pi
 signal1 = repeat(cos(x), inner=[1, 1, length(angles)])
-signal2 = cat(3, [cos(x + a) for a in angles]...)
+signal2 = cat(3, [r[i]*cos(x + angles[i]) for i = 1:length(angles)]...)
 plv_signals = [signal1 signal2]
 
-coh, plv, ppc, ccor = multitaper(plv_signals, (Coherence(), PLV(), PPC(),
-                                               JCircularCorrelation()),
-                                        tapers=ones(period*nperiods))
+coh, plv, ppc, pli, pli2unbiased, wpli, wpli2debiased, ccor = multitaper(plv_signals, (Coherence(), PLV(), PPC(),
+                                                                                       PLI(), PLI2Unbiased(), WPLI(),
+                                                                                       WPLI2Debiased(),
+                                                                                       JCircularCorrelation()),
+                                                                         tapers=ones(period*nperiods))
 
-@test_approx_eq coh[band] true_plv
+@test_approx_eq coh[band] true_coh
 @test_approx_eq plv[band] true_plv
 @test_approx_eq ppc[band] true_ppc
+@test_approx_eq pli[band] true_pli
+@test_approx_eq pli2unbiased[band] true_pli2unbiased
+@test_approx_eq wpli[band] true_wpli
+@test_approx_eq wpli2debiased[band] true_wpli2debiased
 @test_approx_eq ccor[band] 0.0
 
 # Test Jammalamadaka circular correlation

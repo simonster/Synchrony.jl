@@ -290,21 +290,17 @@ end
 end
 function finish{T}(s::PLI{T})
     out = zeros(T, size(s.x, 1), size(s.x, 2))
-    for i = 1:size(s.x, 2)
-        for j = 1:size(s.x, 1)
-            n = s.n[j, i]
-            out[j. i] = abs(s.x[j, i])/n
-        end
+    for i = 1:size(s.x, 2), j = 1:size(s.x, 1)
+        n = s.n[j, i]
+        out[j, i] = abs(s.x[j, i])/n
     end
     out
 end
 function finish{T}(s::PLI2Unbiased{T})
     out = zeros(T, size(s.x, 1), size(s.x, 2))
-    for i = 1:size(s.x, 2)
-        for j = 1:size(s.x, 1)
-            n = s.n[j, i]
-            out[j, i] = (n * abs2(s.x[j, i]/n) - 1)/(n - 1)
-        end
+    for i = 1:size(s.x, 2), j = 1:size(s.x, 1)
+        n = s.n[j, i]
+        out[j, i] = (n * abs2(s.x[j, i]/n) - 1)/(n - 1)
     end
     out
 end
@@ -321,7 +317,7 @@ datasize(s::WPLI, nout) = (2, nout, size(s.pairs, 2))
     A[1, j, i] += z
     A[2, j, i] += abs(z)
 end
-function finish{T}(s::WPLI{T}, n)
+function finish{T}(s::WPLI{T})
     out = zeros(T, size(s.x, 2), size(s.x, 3))
     for i = 1:size(out, 2), j = 1:size(out, 1)
         out[j, i] = abs(s.x[1, j, i])/s.x[2, j, i]
@@ -335,7 +331,7 @@ end
 # See Vinck et al. (2011) as above.
 @pairwisestat WPLI2Debiased Array{T,3}
 # We need 3 fields per freq/channel in s.x
-datasize(s::WPLI, nout) = (3, nout, size(s.pairs, 2))
+datasize(s::WPLI2Debiased, nout) = (3, nout, size(s.pairs, 2))
 @accumulatebypair WPLI2Debiased A j i x y begin
     z = imag(conj(x)*y)
     A[1, j, i] += z
