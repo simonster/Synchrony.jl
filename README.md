@@ -1,4 +1,4 @@
-# Spectral analysis for Julia
+# Analysis of synchronous signals
 
 [![Build Status](https://travis-ci.org/simonster/Synchrony.jl.png?branch=master)](https://travis-ci.org/simonster/Synchrony.jl)
 
