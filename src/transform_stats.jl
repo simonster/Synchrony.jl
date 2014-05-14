@@ -592,6 +592,12 @@ end
 #     frequencies x channels x ntrials
 #
 # Returns (truestat, variance, bias)
+function jackknife_bias_var{T,S<:Integer}(truestat::Array{T,3}, surrogates::Array{T,4}, n::Array{S,4})
+    b, v = jackknife_bias_var(reshape(truestat, stride(truestat, 3), size(truestat, 3)),
+                              reshape(surrogates, stride(surrogates, 3), size(surrogates, 3), size(surrogates, 4)),
+                              reshape(n, stride(n, 3), size(n, 3), size(n, 4)))
+    (reshape(b, size(truestat)), reshape(v, size(truestat)))
+end
 function jackknife_bias_var{T,S<:Integer}(truestat::Matrix{T}, surrogates::Array{T,3}, n::Array{S,3})
     # Compute sum
     m = zeros(T, size(truestat))
@@ -793,29 +799,29 @@ end
 # frequencies x channels x trials or
 # frequencies x channels x ntapers x trials or
 # frequencies x time x channels x ntapers x trials
-function applystat{T<:Real}(s::TransformStatistic{T}, data::Array{Complex{T},4})
+function applystat{T<:Real}(s::TransformStatistic{T}, data::Array{Complex{T},4}; trials=1:size(data,4))
     init(s, size(data, 1), size(data, 2), size(data, 3), size(data, 4))
     offset = size(data, 1)*size(data, 2)
-    for j = 1:size(data, 4), itaper = 1:size(data, 3)
+    for j = trials, itaper = 1:size(data, 3)
             accumulate(s, pointer_to_array(pointer(data,
                                                    offset*((itaper-1)+size(data, 3)*(j-1))+1),
                                            (size(data, 1), size(data, 2))), itaper)
     end
     finish(s)
 end
-applystat{T<:Real}(s::TransformStatistic{T}, data::Array{Complex{T},2}) =
-    vec(applystat(s, reshape(data, 1, size(data, 1), 1, size(data, 2))))
-applystat{T<:Real}(s::TransformStatistic{T}, data::Array{Complex{T},3}) =
-    applystat(s, reshape(data, size(data, 1), size(data, 2), 1, size(data, 3)))
+applystat{T<:Real}(s::TransformStatistic{T}, data::Array{Complex{T},2}; trials=1:size(data,2)) =
+    vec(applystat(s, reshape(data, 1, size(data, 1), 1, size(data, 2)), trials=trials))
+applystat{T<:Real}(s::TransformStatistic{T}, data::Array{Complex{T},3}; trials=1:size(data,3)) =
+    applystat(s, reshape(data, size(data, 1), size(data, 2), 1, size(data, 3)), trials=trials)
 
 drop1(x1, xs...) = xs
 reshape_output(d1::Int, d2::Int, out) = reshape(out, d1, d2, drop1(size(out)...)...)
 reshape_output_tuple(d1::Int, d2::Int) = ()
 reshape_output_tuple(d1::Int, d2::Int, out1, out...) = tuple(reshape_output(d1, d2, out1), reshape_output_tuple(d1, d2, out...)...)
 reshape_output(d1::Int, d2::Int, out::Tuple) = reshape_output_tuple(d1, d2, out...)
-function applystat{T<:Real}(s::TransformStatistic{T}, data::Array{Complex{T},5})
+function applystat{T<:Real}(s::TransformStatistic{T}, data::Array{Complex{T},5}; trials=1:size(data,5))
     out = applystat(s, reshape(data, size(data, 1)*size(data, 2), size(data, 3),
-                               size(data, 4), size(data, 5)))
+                               size(data, 4), size(data, 5)), trials=trials)
     reshape_output(size(data, 1), size(data, 2), out)
 end
 
@@ -823,40 +829,35 @@ end
 # Apply transform statistic to permutations of transformed data
 #
 # Data format is as above
-function permstat{T<:Real}(s::TransformStatistic{T}, data::Array{Complex{T},4}, nperms::Int)
-    p1 = doperm(s, data)
+function permstat{T<:Real}(s::TransformStatistic{T}, data::Array{Complex{T},4}, nperms::Int; trials=1:size(data,4))
+    p1 = doperm(s, data, trials)
     perms = similar(p1, tuple(size(p1, 1), size(p1, 2), nperms))
     perms[:, :, 1] = p1
     for i = 2:nperms
-        perms[:, :, i] = doperm(s, data)
+        perms[:, :, i] = doperm(s, data, trials)
     end
     perms
 end
-permstat{T<:Real}(s::TransformStatistic{T}, data::Array{Complex{T},3}, nperms::Int) =
-    permstat(s, reshape(data, size(data, 1), size(data, 2), 1, size(data, 3)), nperms)
-function permstat{T<:Real}(s::TransformStatistic{T}, data::Array{Complex{T},5}, nperms::Int)
+permstat{T<:Real}(s::TransformStatistic{T}, data::Array{Complex{T},3}, nperms::Int; trials=1:size(data,3)) =
+    permstat(s, reshape(data, size(data, 1), size(data, 2), 1, size(data, 3)), nperms; trials=trials)
+function permstat{T<:Real}(s::TransformStatistic{T}, data::Array{Complex{T},5}, nperms::Int; trials=1:size(data,5))
     out = permstat(s, reshape(data, size(data, 1)*size(data, 2), size(data, 3),
-                               size(data, 4), size(data, 5)), nperms);
+                               size(data, 4), size(data, 5)), nperms; trials=trials);
     reshape(out, size(data, 1), size(data, 2), size(out, 2), nperms)
 end
 
-function doperm(s, data)
+function doperm(s, data, trials)
     init(s, size(data, 1), size(data, 2), size(data, 3), size(data, 4))
-    trials = Array(Int32, size(data, 2), size(data, 4))
-    trialtmp = Int32[1:size(data, 4)]
-    tmp = similar(data, (size(data, 1), size(data, 2)))
 
-    for j = 1:size(data, 2)
-        shuffle!(trialtmp)
-        trials[j, :] = trialtmp
-    end
+    shuffled_trials = isa(trials, Vector{Int}) ? copy(trials) : convert(Vector{Int}, trials)
+    shuffle!(shuffled_trials)
 
-    for k = 1:size(data, 4), itaper = 1:size(data, 3)
-        for m = 1:size(data, 2), n = 1:size(data, 1)
-            # TODO consider transposing data array
-            tmp[n, m] = data[n, m, itaper, trials[m, k]]
-        end
-        accumulate(s, tmp, itaper)
+    for itrial = 1:length(trials), itaper = 1:size(data, 3)
+        real = pointer_to_array(pointer(data, ((trials[itrial]-1)*size(data, 3)+(itaper-1))*size(data, 2)*size(data, 1)+1),
+                                (size(data, 1), size(data, 2)), false)
+        shuffled = pointer_to_array(pointer(data, ((shuffled_trials[itrial]-1)*size(data, 3)+(itaper-1))*size(data, 2)*size(data, 1)+1),
+                                    (size(data, 1), size(data, 2)), false)
+        accumulatepairs(s, real, shuffled, itaper)
     end
     finish(s)
 end
