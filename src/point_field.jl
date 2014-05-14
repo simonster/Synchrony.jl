@@ -39,7 +39,6 @@ function spiketriggeredspectrum{T<:Integer,S<:Real}(points::AbstractVector{T}, f
 
     fftin = zeros(dtype, nfft)
     sts = Array(Complex{dtype}, length(freqrange), size(tapers, 2), npoints)
-    stw = Array(S, n, npoints)
     fftout = zeros(Complex{dtype}, nfft >> 1 + 1)
 
     p = FFTW.Plan(fftin, fftout, 1, FFTW.ESTIMATE, FFTW.NO_TIMELIMIT)
@@ -55,13 +54,9 @@ function spiketriggeredspectrum{T<:Integer,S<:Real}(points::AbstractVector{T}, f
                 error("Not enough samples after point $j")
             end
 
-            for l = 1:n
-                stw[l, j] = field[point+winoff+l]
-            end
-
             for i = 1:size(tapers, 2)
                 for l = 1:n
-                    fftin[l] = tapers[l, i]*stw[l, j]
+                    fftin[l] = tapers[l, i]*field[point+winoff+l]
                 end
                 FFTW.execute(p.plan, fftin, fftout)
                 for l = 1:nfreq
@@ -71,7 +66,7 @@ function spiketriggeredspectrum{T<:Integer,S<:Real}(points::AbstractVector{T}, f
         end
     end
 
-    (sts, stw)
+    sts
 end
 
 #
@@ -89,26 +84,12 @@ end
 #
 # This is not (quite) the same thing as the spike field coherence
 # measure in Jarvis & Mitra, 2001 and implemented in Chronux!
-function pfcoherence{T<:Real,S<:Real}(sts::Array{Complex{T},3}, stw::Array{S,2};
-                                      nfft::Int=nextpow2(length(sta)),
-                                      freqrange::Range1{Int}=1:(nfft >> 1 + 1),
-                                      tapers::Union(Vector, Matrix)=hanning(length(window)),
-                                      debias::Bool=false)
-    if size(sts, 1) != length(freqrange)
-        error("Size of spike triggered spectrum must match number of frequencies to use")
-    end
+function pfcoherence{T<:Real}(sts::Array{Complex{T},3}; debias::Bool=false)
     npoints = size(sts, 3)
 
     # Calculate PSD of spike triggered average for each taper
-    fftin = zeros(T, nfft, size(tapers, 2))
-    sta = mean(stw, 2)
-    @inbounds begin
-        for i = 1:size(tapers, 2), l = 1:size(stw, 1)
-            fftin[l, i] = tapers[l, i]*sta[l]
-        end
-    end
-    meanpsd = abs2(rfft(fftin, 1)[freqrange, :])
-    psdsum = sqsum!(Array(T, size(sts, 1), size(sts, 2)), sts, 3)
+    meanpsd = abs2(mean(sts, 3))
+    psdsum = sumsq!(Array(T, size(sts, 1), size(sts, 2)), sts, 3)
 
     # Calculate spike field coherence
     sfc = zeros(T, size(sts, 1))
@@ -121,7 +102,7 @@ function pfcoherence{T<:Real,S<:Real}(sts::Array{Complex{T},3}, stw::Array{S,2};
             sfc[l] += c
         end
     end
-    scale!(sfc, 1.0/size(tapers, 2))
+    scale!(sfc, 1.0/size(sts, 2))
 end
 
 #
@@ -148,12 +129,13 @@ function phasesum{T<:Real}(sts::Array{Complex{T},3})
 end
 
 # Computes the sum of phases for each trial
-function phasesumtrial{T<:Real, U<:Integer}(sts::Array{Complex{T}, 3}, trials::AbstractVector{U})
+function phasesumtrial{T<:Real, U<:Integer}(sts::AbstractArray{Complex{T}, 3}, trials::AbstractVector{U})
     if size(sts, 3) != length(trials)
         error("length of trials does not match third dimension of spike-triggered spectrum")
     end
     nutrial = length(unique(trials))
-    pstrial = zeros(Complex{T}, size(sts, 1), size(sts, 2), nutrial)
+    pstrial = similar(sts, Complex{T}, size(sts, 1), size(sts, 2), nutrial)
+    fill!(pstrial, zero(Complex{T}))
     nintrial = zeros(Int, nutrial)
 
     trial = 1
@@ -175,14 +157,31 @@ function phasesumtrial{T<:Real, U<:Integer}(sts::Array{Complex{T}, 3}, trials::A
     (pstrial, nintrial)
 end
 
+# Compute pfdiffsq with preallocated memory for out, pssum, and
+# pssqsum. out is assumed to be zeroed; pssum and pssqsum are not.
+function _pfdiffsq!{T}(out::Union(Vector{T}, Matrix{T}), pssum::Array{Complex{T},2}, pssqsum::Array{T,2},
+                       pstrial::AbstractArray{Complex{T},3}, trials=1:size(pstrial, 3), idx::Int=1)
+    fill!(pssum, zero(Complex{T}))
+    fill!(pssqsum, zero(T))
+    @inbounds for itrial = trials, itaper = 1:size(pstrial, 2), ifreq = 1:size(pstrial, 1)
+        x = pstrial[ifreq, itaper, itrial]
+        pssum[ifreq, itaper] += x
+        pssqsum[ifreq, itaper] += abs2(x)
+    end
+    @inbounds for itaper = 1:size(pstrial, 2), ifreq = 1:size(pstrial, 1)
+        out[ifreq, idx] += abs2(pssum[ifreq, itaper]) - pssqsum[ifreq, itaper]
+    end
+    out
+end
+
 # Computes the difference between the squared sum of pstrial along the
 # third dimension and the sum of squares of pstrial along the third
-# dimension. If jackknife is true, then also computes the jackknifed
-# difference.
-function pfdiffsq{T}(pstrial::Array{T,3}, jackknife::Bool)
-    pssum = sum(pstrial, 3)
-    pssqsum = sqsum(pstrial, 3)
-    tval = vec(sum(abs2(pssum) - pssqsum, 2))
+# dimension. If "true" is provided as the second argument, perform
+# jackknifing. If a number is provided, perform bootstrapping.
+function pfdiffsq{T<:Real}(pstrial::AbstractArray{Complex{T},3}, jackknife::Bool)
+    pssum = Array(Complex{T}, size(pstrial, 1), size(pstrial, 2))
+    pssqsum = Array(T, size(pstrial, 1), size(pstrial, 2))
+    tval = _pfdiffsq!(zeros(T, size(pstrial, 1)), pssum, pssqsum, pstrial)
 
     if jackknife
         jnval = zeros(T, size(pstrial, 1), size(pstrial, 3))
@@ -198,25 +197,43 @@ function pfdiffsq{T}(pstrial::Array{T,3}, jackknife::Bool)
     (tval, jnval)
 end
 
-jnvar(jnval, dim) = var(jnval, dim)*(size(jnval, dim) - 1)/sqrt(size(jnval, dim))
+function pfdiffsq{T<:Real}(pstrial::AbstractArray{Complex{T},3}, nbootstraps::Int)
+    pssum = Array(Complex{T}, size(pstrial, 1), size(pstrial, 2))
+    pssqsum = Array(T, size(pstrial, 1), size(pstrial, 2))
+    tval = _pfdiffsq!(zeros(T, size(pstrial, 1)), pssum, pssqsum, pstrial)
+
+    bsval = similar(pstrial, T, size(pstrial, 1), nbootstraps)
+    fill!(bsval, zero(T))
+    @inbounds begin
+        trials = Array(Int, size(pstrial, 3))
+        for iboot = 1:nbootstraps
+            rand!(1:size(pstrial, 3), trials)
+            _pfdiffsq!(bsval, pssum, pssqsum, pstrial, trials, iboot)
+        end
+        retbsval = bsval
+    end
+    (tval, retbsval)
+end
+
+jnvar(jnval, dim) = scale!(var(jnval, dim), (size(jnval, dim) - 1)/size(jnval, dim))
 
 # Computes the PLV
-pfplv{T<:Real}(sts::Array{Complex{T},3}) =
+pfplv{T<:Real}(sts::AbstractArray{Complex{T},3}) =
     amean(scale!(phasesum(sts), 1.0/size(sts, 3)), 2)
 
 # Computes the PPC0 statistic from Vinck et al. (2012), which assumes
 # that the LFPs surrounding all spikes are independent
-pfppc0{T<:Real}(sts::Array{Complex{T}, 3}) =
+pfppc0{T<:Real}(sts::AbstractArray{Complex{T}, 3}) =
     (abs2(phasesum(sts)) - size(sts, 3))/(size(sts, 3)*(size(sts, 3) - 1))
 
 # Computes the PPC1 statistic from Vinck et al. (2012), which accounts
 # for statistical dependence of spike-LFP phases within a trial
-function pfppc1{T<:Real, U<:Integer}(sts::Array{Complex{T}, 3}, trials::AbstractVector{U};
+function pfppc1{T<:Real, U<:Integer}(sts::AbstractArray{Complex{T}, 3}, trials::AbstractVector{U};
                                      estimatevar::Bool=false)
     pstrial, nintrial = phasesumtrial(sts, trials)
     tval, jnval = pfdiffsq(pstrial, estimatevar)
 
-    nintrial2sum = sqsum(nintrial, estimatevar)
+    nintrial2sum = sqsum(nintrial)
     scale!(tval, 1.0/(size(pmtrial, 2) * (abs2(size(sts, 3)) - nintrial2sum)))
 
     if estimatevar
@@ -231,8 +248,11 @@ end
 # Computes the PPC2 statistic from Vinck et al. (2012), which accounts
 # for statistical dependence of spike-LFP phases within a trial as well
 # as dependence between spike count and phase
-function pfppc2{T<:Real, U<:Integer}(sts::Array{Complex{T}, 3}, trials::AbstractVector{U};
-                                     estimatevar::Bool=false)
+function pfppc2{T<:Real, U<:Integer}(sts::AbstractArray{Complex{T}, 3}, trials::AbstractVector{U};
+                                     estimatevar::Bool=false, nbootstraps::Int=0)
+    estimatevar == false || nbootstraps == 0 ||
+        error("cannot both bootstrap and estimate variance by jackknifing")
+
     pmtrial, nintrial = phasesumtrial(sts, trials)
     @inbounds begin
         for i = 1:size(pmtrial, 3)
@@ -244,10 +264,13 @@ function pfppc2{T<:Real, U<:Integer}(sts::Array{Complex{T}, 3}, trials::Abstract
         end
     end
 
-    tval, jnval = pfdiffsq(pmtrial, estimatevar)
-    scale!(tval, 1.0/(size(pmtrial, 2) * size(pmtrial, 3) * (size(pmtrial, 3) - 1)))
+    tval, jnval = pfdiffsq(pmtrial, nbootstraps != 0 ? nbootstraps : estimatevar)
+    normf = 1.0/(size(pmtrial, 2) * size(pmtrial, 3) * (size(pmtrial, 3) - 1))
+    scale!(tval, normf)
 
-    if estimatevar
+    if nbootstraps != 0
+        (tval, scale!(jnval, normf))
+    elseif estimatevar
         scale!(jnval, 1.0/(size(pmtrial, 2) * (size(pmtrial, 3) - 1) * (size(pmtrial, 3) - 2)))
         (tval, jnvar(jnval, 2))
     else
