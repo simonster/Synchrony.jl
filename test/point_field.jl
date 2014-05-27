@@ -1,4 +1,4 @@
-using Synchrony, NumericExtensions, Base.Test
+using Synchrony, Base.Test
 
 # Test pxcorr
 x = [rand() > 0.5 for i = 1:50]

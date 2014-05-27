@@ -1,4 +1,4 @@
-using Synchrony, NumericExtensions, Base.Test
+using Synchrony, Base.Test
 datadir = joinpath(Pkg.dir("Synchrony"), "test", "data")
 
 # Test psd output against output of pmtm for sinusoid with white noise

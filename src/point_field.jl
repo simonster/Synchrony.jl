@@ -88,14 +88,14 @@ function pfcoherence{T<:Real}(sts::Array{Complex{T},3}; debias::Bool=false)
     npoints = size(sts, 3)
 
     # Calculate PSD of spike triggered average for each taper
-    meanpsd = abs2(mean(sts, 3))
-    psdsum = sumsq!(Array(T, size(sts, 1), size(sts, 2)), sts, 3)
+    meanpsd = sum(sts, 3)
+    psdsum = Base.sumabs2!(sts, 3)
 
     # Calculate spike field coherence
     sfc = zeros(T, size(sts, 1))
     @inbounds begin
         for i = 1:size(psdsum, 2), l = 1:size(psdsum, 1)
-            c = npoints*meanpsd[l, i]/psdsum[l, i]
+            c = abs2(meanpsd[l, i])/(npoints*psdsum[l, i])
             if debias
                 c = (npoints*c - 1)/(npoints - 1)
             end
@@ -103,6 +103,27 @@ function pfcoherence{T<:Real}(sts::Array{Complex{T},3}; debias::Bool=false)
         end
     end
     scale!(sfc, 1.0/size(sts, 2))
+end
+
+# Jackknife surrogates of point-field coherence
+function pfcoherence_jn{T<:Real}(sts::Array{Complex{T},3}; debias::Bool=false)
+    npoints = size(sts, 3)
+
+    # Calculate PSD of spike triggered average for each taper
+    meanpsd = sum(sts, 3)
+    psdsum = Base.sumabs2!(sts, 3)
+
+    # Calculate spike field coherence
+    jn = zeros(T, size(sts, 1), size(sts, 3))
+    for ispike = 1:1:size(sts, 3), itaper = 1:size(sts, 2), ifreq = 1:size(sts, 1)
+        v = sts[ifreq, itaper, ispike]
+        c = abs2(meanpsd[ifreq, itaper] - v)/((npoints-1)*(psdsum[ifreq, itaper] - abs2(v)))
+        if debias
+            c = ((npoints-1)*c - 1)/(npoints - 2)
+        end
+        jn[ifreq, ispike] += c
+    end
+    scale!(jn, 1.0/size(sts, 2))
 end
 
 #
