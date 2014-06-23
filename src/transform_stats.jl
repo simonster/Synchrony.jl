@@ -1,12 +1,25 @@
 export PowerSpectrum, PowerSpectrumVariance, CrossSpectrum, Coherence, Coherency, PLV, PPC, PLI,
        PLI2Unbiased, WPLI, WPLI2Debiased, JMCircularCorrelation, JCircularCorrelation,
-       ShiftPredictor, Jackknife, allpairs, applystat, permstat, jackknife_bias_var
+       HurtadoModulationIndex, ShiftPredictor, Jackknife, allpairs, allorderedpairs, applystat,
+       permstat, jackknife_bias_var
 
 # Get all pairs of channels
 function allpairs(n)
     pairs = Array(Int, 2, binomial(n, 2))
     k = 0
     for i = 1:n-1, j = i+1:n
+        k += 1
+        pairs[1, k] = i
+        pairs[2, k] = j
+    end
+    pairs
+end
+
+# Get all pairs of channels when order is meaningful
+function allorderedpairs(n)
+    pairs = Array(Int, 2, abs2(n))
+    k = 0
+    for i = 1:n, j = 1:n
         k += 1
         pairs[1, k] = i
         pairs[2, k] = j
@@ -21,11 +34,12 @@ abstract TransformStatistic{T<:Real}
 abstract PairwiseTransformStatistic{T<:Real} <: TransformStatistic{T}
 
 # Generate a new PairwiseTransformStatistic, including constructors
-macro pairwisestat(name, xtype)
+macro pairwisestat(name, xtype, fields...)
     esc(quote
         type $name{T<:Real} <: PairwiseTransformStatistic{T}
             pairs::Array{Int, 2}
             x::$xtype
+            $(isempty(fields) ? nothing : fields[1])
             n::Matrix{Int32}
             $name() = new()
             $name(pairs::Array{Int, 2}) = new(pairs)
@@ -33,6 +47,7 @@ macro pairwisestat(name, xtype)
         $name() = $name{Float64}()
     end)
 end
+pairs(s::PairwiseTransformStatistic) = x.pairs
 
 # Most PairwiseTransformStatistics will initialize their fields the same way
 function init{T}(s::PairwiseTransformStatistic{T}, nout, nchannels, ntapers, ntrials)
@@ -461,6 +476,109 @@ function finish{T}(s::JMCircularCorrelation{T})
         (ρ2, ρ2²) = corp(ni, ycs, yc, ys, yc2, ys2)
         out[j, i] = (ρcc² + ρcs² + ρsc² + ρss² + 2*(ρcc*ρss + ρcs*ρsc)*ρ1*ρ2 -
                      2*(ρcc*ρcs + ρsc*ρss)*ρ2 - 2(ρcc*ρsc + ρcs*ρss)*ρ1)/((1-ρ1²)*(1-ρ2²))
+    end
+    out
+end
+
+#
+# Entropy-based cross frequency coupling
+#
+# See:
+# Hurtado, J. M., Rubchinsky, L. L., & Sigvardt, K. A. (2004).
+# Statistical Method for Detection of Phase-Locking Episodes in Neural
+# Oscillations. Journal of Neurophysiology, 91(4), 1883–1898.
+# doi:10.1152/jn.00853.2003
+# Tort, A. B. L., Kramer, M. A., Thorn, C., Gibson, D. J., Kubota, Y.,
+# Graybiel, A. M., & Kopell, N. J. (2008). Dynamic cross-frequency
+# couplings of local field potential oscillations in rat striatum and
+# hippocampus during performance of a T-maze task. Proceedings of the
+# National Academy of Sciences, 105(51), 20517–20522.
+# doi:10.1073/pnas.0810524105
+# 
+
+type HurtadoModulationIndex{T<:Real} <: PairwiseTransformStatistic{T}
+    nbins::Uint8
+    pairs::Array{Int,2}
+    x::Array{T,4}
+    tmp_phase::Matrix{Uint8}
+    tmp_amp::Matrix{T}
+    n::Array{Int32,3}
+    HurtadoModulationIndex() = new(18)
+    HurtadoModulationIndex(nbins::Integer) =
+        (nbins <= 255 || error("nbins must be <= 255"); new(nbins))
+    HurtadoModulationIndex(pairs::Array{Int, 2}) = new(18, pairs)
+    HurtadoModulationIndex(pairs::Array{Int, 2}, nbins::Integer) =
+        (nbins <= 255 || error("nbins must be <= 255"); new(nbins, pairs))
+end
+HurtadoModulationIndex(args...) = HurtadoModulationIndex{Float64}(args...)
+
+function init{T}(s::HurtadoModulationIndex{T}, nout, nchannels, ntapers, ntrials)
+    if !isdefined(s, :pairs); s.pairs = allorderedpairs(nchannels); end
+    s.x = zeros(T, s.nbins, nout, nout, size(s.pairs, 2))
+    s.tmp_phase = zeros(Uint8, nout, nchannels)
+    s.tmp_amp = zeros(T, nout, nchannels)
+    s.n = zeros(Int32, s.nbins, nout, size(s.pairs, 2))
+end
+
+function accumulate(s::HurtadoModulationIndex, fftout, itaper)
+    pairs = s.pairs
+    tmp_phase = s.tmp_phase
+    tmp_amp = s.tmp_amp
+    n = s.n
+    A = s.x
+    nbins = s.nbins
+    sz = size(fftout, 1)
+
+    m = nbins/2pi
+    for j = 1:size(fftout, 2), i = 1:size(fftout, 1)
+        @inbounds a = (angle(fftout[i, j])+pi)*m
+        @inbounds tmp_phase[i, j] = isnan(a) ? 0 : a >= nbins ? nbins : iceil(a)
+        @inbounds tmp_amp[i, j] = abs(fftout[i, j])
+    end
+
+    @inbounds begin
+        for ipair = 1:size(pairs, 2)
+            ch1offset = (pairs[1, ipair]-1)*sz
+            ch2offset = (pairs[2, ipair]-1)*sz
+            pairoffset = (ipair-1)*sz
+
+            for ifreq1 = 1:sz
+                phasebin = tmp_phase[ifreq1+ch1offset]
+                phasebin != 0 || continue
+                n[phasebin, ifreq1, ipair] += 1
+
+                for ifreq2 = 1:sz
+                    amp = tmp_amp[ifreq2+ch2offset]
+                    !isnan(amp) || continue
+                    A[phasebin, ifreq1, ifreq2, ipair] += amp
+                end
+            end
+        end
+    end
+end
+
+function finish{T}(s::HurtadoModulationIndex{T})
+    A = s.x
+    n = s.n
+    nbins = s.nbins
+    out = zeros(T, size(A, 2), size(A, 3), size(A, 4))
+    tmp = zeros(typeof(zero(T)/1), nbins)
+    hmax = log(float64(nbins))
+    @inbounds for l = 1:size(A, 4), k = 1:size(A, 3), j = 1:size(A, 2)
+        d = zero(T)/1+zero(T)/1
+        for i = 1:size(A, 1)
+            nv = n[i, j, l]
+            d += tmp[i] = A[i, j, k, l]/nv
+        end
+        d = inv(d)
+
+        h = zero(T)/1+zero(T)/1
+        for i = 1:nbins
+            p = tmp[i]*d
+            h -= p*log(p)
+        end
+
+        out[j, k, l] = (hmax - h)/hmax
     end
     out
 end

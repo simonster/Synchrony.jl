@@ -117,6 +117,30 @@ true_ccor = sum(abs2(cor(canoncor(am, bm))))
 #          cor(real(expi[:, 2]), imag(expi[:, 2]))))
 @test_approx_eq applystat(JMCircularCorrelation(), expi.')[1] true_ccor
 
+# Test Hurtado modulation index
+# Create two signals with some phase-amplitude coupling
+function dumbcfc(x, y, nbins)
+    angles = angle(x)
+    amps = abs(y)
+    bins = linspace(-pi, pi, nbins+1)
+    mean_amp = [mean(amps[bins[i] .<= angles .<= bins[i+1]]) for i = 1:nbins]
+    pj = mean_amp/sum(mean_amp)
+    h = -sum(pj.*log(pj))
+    hmax = log(nbins)
+    (hmax - h)/hmax
+end
+s1 = exp(im*2pi*[0.05:.1:10]).*repmat([0.05:.1:1], 10)
+s2 = exp(im*2pi*[1/18:1/9:11+1/18]).*repmat([0.99, ones(9)*0.01], 10)
+input = [s1 s2].'
+
+pairs = allorderedpairs(2)
+@test pairs == [1 1 2 2
+                1 2 1 2]
+out = applystat(HurtadoModulationIndex(10), input)
+for i = 1:size(pairs, 2)
+    @test_approx_eq out[i] dumbcfc(input[pairs[1, i], :], input[pairs[2, i], :], 10)
+end
+
 # Test NaN handling
 ft1 = mtfft(plv_signals, tapers=ones(period*nperiods))
 ft2 = copy(ft1)

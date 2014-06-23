@@ -16,6 +16,7 @@ This package implements efficient multitaper and continuous wavelet transforms, 
 - Debiased squared weighted phase lag index (`WPLI2Debiased`)
 - Jammalamadaka circular correlation coefficient (`JCircularCorrelation`)
 - Jupp-Mardia squared circular correlation coefficient (`JMCircularCorrelation`)
+- Hurtado et al. modulation index (phase-amplitude coupling) (`HurtadoModulationIndex`)
 
 Additionally, the following point-field measures are implemented:
 
