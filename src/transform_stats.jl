@@ -532,7 +532,7 @@ function accumulate(s::HurtadoModulationIndex, fftout, itaper)
     m = nbins/2pi
     for j = 1:size(fftout, 2), i = 1:size(fftout, 1)
         @inbounds a = (angle(fftout[i, j])+pi)*m
-        @inbounds tmp_phase[i, j] = isnan(a) ? 0 : a >= nbins ? nbins : iceil(a)
+        @inbounds tmp_phase[i, j] = isnan(a) ? uint8(0) : a >= nbins ? nbins : uint8(iceil(a))
         @inbounds tmp_amp[i, j] = abs(fftout[i, j])
     end
 
