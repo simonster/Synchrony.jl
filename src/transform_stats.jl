@@ -502,7 +502,7 @@ type HurtadoModulationIndex{T<:Real} <: PairwiseTransformStatistic{T}
     x::Array{T,4}
     tmp_phase::Matrix{Uint8}
     tmp_amp::Matrix{T}
-    n::Array{Int32,3}
+    n::Array{Int32,4}
     HurtadoModulationIndex() = new(18)
     HurtadoModulationIndex(nbins::Integer) =
         (nbins <= 255 || error("nbins must be <= 255"); new(nbins))
@@ -517,7 +517,7 @@ function init{T}(s::HurtadoModulationIndex{T}, nout, nchannels, ntapers, ntrials
     s.x = zeros(T, s.nbins, nout, nout, size(s.pairs, 2))
     s.tmp_phase = zeros(Uint8, nout, nchannels)
     s.tmp_amp = zeros(T, nout, nchannels)
-    s.n = zeros(Int32, s.nbins, nout, size(s.pairs, 2))
+    s.n = zeros(Int32, s.nbins, nout, nout, size(s.pairs, 2))
 end
 
 function accumulate(s::HurtadoModulationIndex, fftout, itaper)
@@ -542,14 +542,15 @@ function accumulate(s::HurtadoModulationIndex, fftout, itaper)
             ch2offset = (pairs[2, ipair]-1)*sz
             pairoffset = (ipair-1)*sz
 
-            for ifreq1 = 1:sz
-                phasebin = tmp_phase[ifreq1+ch1offset]
-                phasebin != 0 || continue
-                n[phasebin, ifreq1, ipair] += 1
+            for ifreq2 = 1:sz
+                amp = tmp_amp[ifreq2+ch2offset]
+                !isnan(amp) || continue
 
-                for ifreq2 = 1:sz
-                    amp = tmp_amp[ifreq2+ch2offset]
-                    !isnan(amp) || continue
+                for ifreq1 = 1:sz
+                    phasebin = tmp_phase[ifreq1+ch1offset]
+                    phasebin != 0 || continue
+
+                    n[phasebin, ifreq1, ifreq2, ipair] += 1
                     A[phasebin, ifreq1, ifreq2, ipair] += amp
                 end
             end
@@ -567,7 +568,7 @@ function finish{T}(s::HurtadoModulationIndex{T})
     @inbounds for l = 1:size(A, 4), k = 1:size(A, 3), j = 1:size(A, 2)
         d = zero(T)/1+zero(T)/1
         for i = 1:size(A, 1)
-            nv = n[i, j, l]
+            nv = n[i, j, k, l]
             d += tmp[i] = A[i, j, k, l]/nv
         end
         d = inv(d)
