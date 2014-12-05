@@ -1,4 +1,4 @@
-module Synchrony
+module Synchrony2
 using DSP
 
 export frequencies
@@ -34,7 +34,7 @@ outputtype(::Union(Type{Int8}, Type{Uint8}, Type{Int16}, Type{Uint16})) = Float6
 outputtype{T<:Real}(::Type{T}) = Float64
 
 include("transform_stats.jl")
-include("multitaper.jl")
-include("point_field.jl")
+# include("multitaper.jl")
+# include("point_field.jl")
 include("wavelet.jl")
 end

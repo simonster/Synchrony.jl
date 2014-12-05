@@ -38,7 +38,7 @@ r = [
 
 expangles = exp(im*angles)
 expcoef = r.*expangles
-true_coh = abs(mean(expcoef))./sqrt(mean(abs2(r)))
+true_coh = mean(expcoef)./sqrt(mean(abs2(r)))
 true_plv = abs(mean(expangles))
 true_ppc = 1-var(expangles)
 true_pli = mean(sign(angles))
@@ -51,28 +51,28 @@ for i1 = 1:length(angles), i2 = 1:length(angles)
 end
 true_wpli2debiased = mean(pairs)./mean(abs(pairs))
 
-period = 32
-nperiods = 16
-band = nperiods + 1
-x = (0:2/period:2*nperiods-2/period)*pi
-signal1 = repeat(cos(x), inner=[1, 1, length(angles)])
-signal2 = cat(3, [r[i]*cos(x + angles[i]) for i = 1:length(angles)]...)
-plv_signals = [signal1 signal2]
+oneinput = ones(Complex128, length(angles))
+csinput = [oneinput expcoef].'
 
-coh, plv, ppc, pli, pli2unbiased, wpli, wpli2debiased, ccor = multitaper(plv_signals, (Coherence(), PLV(), PPC(),
-                                                                                       PLI(), PLI2Unbiased(), WPLI(),
-                                                                                       WPLI2Debiased(),
-                                                                                       JCircularCorrelation()),
-                                                                         tapers=ones(period*nperiods))
+# Single input
+@test_approx_eq computestat(Coherency(), csinput)[1, 2] true_coh
+@test_approx_eq computestat(Coherence(), csinput)[1, 2] abs(true_coh)
+@test_approx_eq computestat(PLV(), csinput)[1, 2] true_plv
+@test_approx_eq computestat(PPC(), csinput)[1, 2] true_ppc
+@test_approx_eq computestat(PLI(), csinput)[1, 2] true_pli
+@test_approx_eq computestat(PLI2Unbiased(), csinput)[1, 2] true_pli2unbiased
+@test_approx_eq computestat(WPLI(), csinput)[1, 2] true_wpli
+@test_approx_eq computestat(WPLI2Debiased(), csinput)[1, 2] true_wpli2debiased
 
-@test_approx_eq coh[band] true_coh
-@test_approx_eq plv[band] true_plv
-@test_approx_eq ppc[band] true_ppc
-@test_approx_eq pli[band] true_pli
-@test_approx_eq pli2unbiased[band] true_pli2unbiased
-@test_approx_eq wpli[band] true_wpli
-@test_approx_eq wpli2debiased[band] true_wpli2debiased
-@test_approx_eq ccor[band] 0.0
+# Two input
+@test_approx_eq computestat(Coherency(), oneinput.', expcoef.')[1] true_coh
+@test_approx_eq computestat(Coherence(), oneinput.', expcoef.')[1] abs(true_coh)
+@test_approx_eq computestat(PLV(), oneinput.', expcoef.')[1] true_plv
+@test_approx_eq computestat(PPC(), oneinput.', expcoef.')[1] true_ppc
+@test_approx_eq computestat(PLI(), oneinput.', expcoef.')[1] true_pli
+@test_approx_eq computestat(PLI2Unbiased(), oneinput.', expcoef.')[1] true_pli2unbiased
+@test_approx_eq computestat(WPLI(), oneinput.', expcoef.')[1] true_wpli
+@test_approx_eq computestat(WPLI2Debiased(), oneinput.', expcoef.')[1] true_wpli2debiased
 
 # Test Jammalamadaka circular correlation
 angles = [
@@ -102,7 +102,8 @@ aabar = sin(angles[:, 1] .- abar)
 bbbar = sin(angles[:, 2] .- bbar)
 true_ccor = sum(aabar.*bbbar)/sqrt(sum(abs2(aabar)).*sum(abs2(bbbar)))
 
-@test_approx_eq applystat(JCircularCorrelation(), expi.')[1] true_ccor
+@test_approx_eq computestat(JammalamadakaR(), expi.')[1, 2] true_ccor
+@test_approx_eq computestat(JammalamadakaR(), expi[:, 1].', expi[:, 2].')[1] true_ccor
 
 # Test Jupp and Mardia circular correlation
 am = [real(expi[:, 1]) imag(expi[:, 1])]
@@ -115,7 +116,8 @@ true_ccor = sum(abs2(cor(canoncor(am, bm))))
 #          cor(imag(expi[:, 1]), imag(expi[:, 2])),
 #          cor(real(expi[:, 1]), imag(expi[:, 1])),
 #          cor(real(expi[:, 2]), imag(expi[:, 2]))))
-@test_approx_eq applystat(JMCircularCorrelation(), expi.')[1] true_ccor
+@test_approx_eq computestat(JuppMardiaR(), expi.')[1, 2] true_ccor
+@test_approx_eq computestat(JuppMardiaR(), expi[:, 1].', expi[:, 2].')[1] true_ccor
 
 # Test Hurtado modulation index
 # Create two signals with some phase-amplitude coupling
@@ -131,87 +133,57 @@ function dumbcfc(x, y, nbins)
 end
 s1 = exp(im*2pi*[0.05:.1:10]).*repmat([0.05:.1:1], 10)
 s2 = exp(im*2pi*[1/18:1/9:11+1/18]).*repmat([0.99, ones(9)*0.01], 10)
-input = [s1 s2].'
 
-pairs = allorderedpairs(2)
-@test pairs == [1 1 2 2
-                1 2 1 2]
-out = applystat(HurtadoModulationIndex(10), input)
-for i = 1:size(pairs, 2)
-    @test_approx_eq out[i] dumbcfc(input[pairs[1, i], :], input[pairs[2, i], :], 10)
-end
-
-# Test NaN handling
-ft1 = mtfft(plv_signals, tapers=ones(period*nperiods))
-ft2 = copy(ft1)
-ft2[5, 2, 1] = NaN
-
-expected = applystat(PowerSpectrum(), ft1)
-expected[5, 2] = applystat(PowerSpectrum(), ft1[:, :, 2:end])[5, 2]
-out = applystat(PowerSpectrum(), ft2)
-@test_approx_eq out expected
-
-for stat in (CrossSpectrum, Coherence, PLV)
-    out = applystat(stat(), ft2)
-    expected = applystat(stat(), ft1)
-    expected[5, 1] = applystat(stat(), ft1[:, :, 2:end])[5, 1]
-    @test_approx_eq out expected
-end
-
-ft2[5, 2, :] = NaN
-@test findn(isnan(applystat(PowerSpectrum(), ft2))) == ([5],[2])
-for stat in (CrossSpectrum, Coherence, PLV)
-    @test findn(isnan(real(applystat(stat(), ft2)))) == ([5],[1])
-end
+out = computestat(HurtadoModulationIndex(10), s1', s2')
+@test_approx_eq out[1] dumbcfc(s1, s2, 10)
 
 # Test jackknife
-for (stat, trueval) in ((Coherence, coh), (PLV, plv))
-    jn = multitaper(plv_signals, Jackknife(stat()), tapers=ones(period*nperiods))
-    (bias, variance) = jackknife_bias_var(jn...)
-    @test_approx_eq jn[1] trueval
-    estimates = zeros(size(plv, 1), size(plv, 2), size(plv_signals, 3))
-    for i = 1:size(plv_signals, 3)
-        estimates[:, :, i] = multitaper(plv_signals[:, :, [1:i-1, i+1:size(plv_signals,3)]],
-                                        stat(), tapers=ones(period*nperiods))
+for stat in (Coherence, Coherency, PLV, PPC)
+    trueval = computestat(stat(), csinput)
+    jn = computestat(Jackknife(stat()), csinput)
+    @test_approx_eq jn.trueval trueval
+    estimates = zeros(eltype(trueval), size(csinput, 1), size(csinput, 1), size(csinput, 2))
+    for i = 1:size(csinput, 2)
+        estimates[:, :, i] = computestat(stat(), csinput[:, [1:i-1, i+1:size(csinput, 2)]])
     end
-    @test_approx_eq bias (size(plv_signals, 3)-1)*(mean(estimates, 3) - trueval)
-    @test_approx_eq variance sum(abs2(estimates .- mean(estimates, 3)), 3)*(size(plv_signals, 3)-1)/size(plv_signals, 3)
+    @test_approx_eq_eps jackknife_bias(jn) (size(csinput, 2)-1)*(mean(estimates, 3) - trueval) sqrt(eps())
+    @test_approx_eq jackknife_var(jn) sum(abs2(estimates .- mean(estimates, 3)), 3)*(size(csinput, 2)-1)/size(csinput, 2)
 end
 
 # Test shift predictor
-x = 0:63
-signal = zeros(length(x), 1, 35)
-for i = 1:size(signal, 3)
-    signal[:, 1, i] = cospi(0.2*x+rand()*2)
-end
-c = multitaper([signal signal], Coherence())
-@test_approx_eq c ones(size(c))
-for lag = 1:5
-    t = multitaper([signal signal[:, :, circshift([1:size(signal, 3)], lag)]], Coherence())
-    sp = multitaper([signal signal], ShiftPredictor(Coherence(), lag))
-    @test_approx_eq t sp
-end
+# x = 0:63
+# signal = zeros(length(x), 1, 35)
+# for i = 1:size(signal, 3)
+#     signal[:, 1, i] = cospi(0.2*x+rand()*2)
+# end
+# c = multitaper([signal signal], Coherence())
+# @test_approx_eq c ones(size(c))
+# for lag = 1:5
+#     t = multitaper([signal signal[:, :, circshift([1:size(signal, 3)], lag)]], Coherence())
+#     sp = multitaper([signal signal], ShiftPredictor(Coherence(), lag))
+#     @test_approx_eq t sp
+# end
 
-# Test jackknifed shift predictor
-for stat in (Coherence, PLV), lag = 1:5
-    t = multitaper([signal signal[:, :, circshift([1:size(signal, 3)], lag)]], Jackknife(stat()))
-    sp = multitaper([signal signal], Jackknife(ShiftPredictor(stat(), lag)))
-    @test_approx_eq t[1] sp[1]
-    (tbias, tvar) = jackknife_bias_var(t...)
-    (spbias, spvar) = jackknife_bias_var(sp...)
-    @test_approx_eq tbias spbias
-    @test_approx_eq tvar spvar
-end
+# # Test jackknifed shift predictor
+# for stat in (Coherence, PLV), lag = 1:5
+#     t = multitaper([signal signal[:, :, circshift([1:size(signal, 3)], lag)]], Jackknife(stat()))
+#     sp = multitaper([signal signal], Jackknife(ShiftPredictor(stat(), lag)))
+#     @test_approx_eq t[1] sp[1]
+#     (tbias, tvar) = jackknife_bias_var(t...)
+#     (spbias, spvar) = jackknife_bias_var(sp...)
+#     @test_approx_eq tbias spbias
+#     @test_approx_eq tvar spvar
+# end
 
 # Test permutations
 #
 # There's no good test for whether the output is "correct," but we test
 # a case where the permuted output should be unity and a case where it
 # shouldn't
-x = 0:63
-ft = mtfft(repeat(signal[:, 1, 1], inner=[1, 2, 35]))
-perms = permstat(Coherence(), ft, 10)
-@test_approx_eq perms ones(size(perms))
-ft = mtfft([signal signal])
-perms = permstat(Coherence(), ft, 10)
-@test all(perms .!= 1)
+# x = 0:63
+# ft = mtfft(repeat(signal[:, 1, 1], inner=[1, 2, 35]))
+# perms = permstat(Coherence(), ft, 10)
+# @test_approx_eq perms ones(size(perms))
+# ft = mtfft([signal signal])
+# perms = permstat(Coherence(), ft, 10)
+# @test all(perms .!= 1)
