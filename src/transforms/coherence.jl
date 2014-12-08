@@ -35,7 +35,7 @@ computestat!{T<:Real}(::Coherence, out::AbstractMatrix{T},
 
 # Two input matrices
 allocwork{T<:Real}(::Coherence, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
-    (Array(Complex{T}, nchannels(X), nchannels(Y)), Array(T, nchannels(X), 1), Array(T, nchannels(Y), 1))
+    (Array(Complex{T}, nchannels(X), nchannels(Y)), Array(T, 1, nchannels(X)), Array(T, 1, nchannels(Y)))
 computestat!{T<:Real}(::Coherence, out::AbstractMatrix{T},
                       work::(Matrix{Complex{T}}, Matrix{T}, Matrix{T}),
                       X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) = 
@@ -83,13 +83,16 @@ function computestat!{T<:Real}(t::Union(Jackknife{Coherency}, Jackknife{Coherenc
 end
 
 # Two input matrices
-allocwork{T<:Real}(t::Union(Jackknife{Coherency}, Jackknife{Coherence}),
-                   X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
-    (allocwork(t.transform, X, Y), Array(T, nchannels(X)), Array(T, nchannels(Y)))
-function computestat!{T<:Real}(t::Union(Jackknife{Coherency}, Jackknife{Coherence}),
-                               out::JackknifeOutput,
-                               work::(Union(Matrix{Complex{T}}, Nothing), Vector{T}, Vector{T}),
-                               X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
+allocwork{T<:Real}(t::Jackknife{Coherency}, X::AbstractVecOrMat{Complex{T}},
+                   Y::AbstractVecOrMat{Complex{T}}) =
+    (nothing, Array(T, 1, nchannels(X)), Array(T, 1, nchannels(Y)))
+allocwork{T<:Real}(t::Jackknife{Coherence}, X::AbstractVecOrMat{Complex{T}},
+                   Y::AbstractVecOrMat{Complex{T}}) =
+    (Array(Complex{T}, nchannels(X), nchannels(Y)), Array(T, 1, nchannels(X)), Array(T, 1, nchannels(Y)))
+function computestat!{T<:Real,V}(t::Union(Jackknife{Coherency}, Jackknife{Coherence}),
+                                 out::JackknifeOutput,
+                                 work::(V, Matrix{T}, Matrix{T}),
+                                 X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
     stat = t.transform
     trueval = out.trueval
     surrogates = out.surrogates
@@ -112,7 +115,7 @@ function computestat!{T<:Real}(t::Union(Jackknife{Coherency}, Jackknife{Coherenc
             end
 
             for i = 1:size(X, 1)
-                v = XXc[j, k] - conj(X[i, j])*Y[i, k]
+                v = XYc[j, k] - conj(X[i, j])*Y[i, k]
                 # XXX maybe precompute sqrt for each channel and trial?
                 surrogates[i, j, k] = surrogateval(t, v)/sqrt((jssq - abs2(X[i, j]))*(kssq - abs2(Y[i, k])))
             end

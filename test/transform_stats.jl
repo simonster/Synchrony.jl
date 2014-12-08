@@ -55,24 +55,18 @@ oneinput = ones(Complex128, length(angles))
 csinput = [oneinput expcoef]
 
 # Single input
-@test_approx_eq computestat(Coherency(), csinput)[1, 2] true_coh
-@test_approx_eq computestat(Coherence(), csinput)[1, 2] abs(true_coh)
-@test_approx_eq computestat(PLV(), csinput)[1, 2] true_plv
-@test_approx_eq computestat(PPC(), csinput)[1, 2] true_ppc
-@test_approx_eq computestat(PLI(), csinput)[1, 2] true_pli
-@test_approx_eq computestat(PLI2Unbiased(), csinput)[1, 2] true_pli2unbiased
-@test_approx_eq computestat(WPLI(), csinput)[1, 2] true_wpli
-@test_approx_eq computestat(WPLI2Debiased(), csinput)[1, 2] true_wpli2debiased
-
-# Two input
-@test_approx_eq computestat(Coherency(), oneinput, expcoef)[1] true_coh
-@test_approx_eq computestat(Coherence(), oneinput, expcoef)[1] abs(true_coh)
-@test_approx_eq computestat(PLV(), oneinput, expcoef)[1] true_plv
-@test_approx_eq computestat(PPC(), oneinput, expcoef)[1] true_ppc
-@test_approx_eq computestat(PLI(), oneinput, expcoef)[1] true_pli
-@test_approx_eq computestat(PLI2Unbiased(), oneinput, expcoef)[1] true_pli2unbiased
-@test_approx_eq computestat(WPLI(), oneinput, expcoef)[1] true_wpli
-@test_approx_eq computestat(WPLI2Debiased(), oneinput, expcoef)[1] true_wpli2debiased
+for (stat, output) in ((Coherency(), true_coh),
+                       (Coherence(), abs(true_coh)),
+                       (PLV(), true_plv),
+                       (PPC(), true_ppc),
+                       (PLI(), true_pli),
+                       (PLI2Unbiased(), true_pli2unbiased),
+                       (WPLI(), true_wpli),
+                       (WPLI2Debiased(), true_wpli2debiased))
+    @test_approx_eq computestat(stat, csinput)[1, 2] output
+    @test_approx_eq computestat(stat, oneinput, expcoef)[1] output
+    @test_approx_eq Base.LinAlg.copytri!(computestat(stat, csinput), 'U', true) computestat(stat, csinput, csinput)
+end
 
 # Test Jammalamadaka circular correlation
 angles = [
@@ -138,16 +132,37 @@ out = computestat(HurtadoModulationIndex(10), s1, s2)
 @test_approx_eq out[1] dumbcfc(s1, s2, 10)
 
 # Test jackknife
-for stat in (Coherence, Coherency, PLV, PPC)
+csinput = [csinput expi]
+for stat in (Coherence, Coherency, PLV, PPC, JammalamadakaR, JuppMardiaR)
     trueval = computestat(stat(), csinput)
+    estimates = zeros(eltype(trueval), size(csinput, 1), size(csinput, 2), size(csinput, 2))
+    for i = 1:size(csinput, 1)
+        estimates[i, :, :] = computestat(stat(), csinput[[1:i-1, i+1:size(csinput, 1)], :])
+    end
     jn = computestat(Jackknife(stat()), csinput)
     @test_approx_eq jn.trueval trueval
-    estimates = zeros(eltype(trueval), size(csinput, 2), size(csinput, 2), size(csinput, 1))
-    for i = 1:size(csinput, 1)
-        estimates[:, :, i] = computestat(stat(), csinput[[1:i-1, i+1:size(csinput, 1)], :])
+    @test_approx_eq_eps jackknife_bias(jn) (size(csinput, 1)-1)*(squeeze(mean(estimates, 1), 1) - trueval) sqrt(eps())
+    @test_approx_eq jackknife_var(jn) squeeze(sum(abs2(estimates .- mean(estimates, 1)), 1), 1)*(size(csinput, 1)-1)/size(csinput, 1)
+
+    if stat == JammalamadakaR || stat == JuppMardiaR
+        # The first channel is constant, which leads to a correlation
+        # coefficient of NaN with itself. It isn't really worth doing
+        # the extra work to set this to NaN instead of 1.0 if given a
+        # single input.
+        estimates[:, 1, 1] = NaN
+        trueval[1, 1] = NaN
     end
-    @test_approx_eq_eps jackknife_bias(jn) (size(csinput, 1)-1)*(mean(estimates, 3) - trueval) sqrt(eps())
-    @test_approx_eq jackknife_var(jn) sum(abs2(estimates .- mean(estimates, 3)), 3)*(size(csinput, 1)-1)/size(csinput, 1)
+
+    for k = 1:(size(csinput, 2)-1), j = (k+1):size(csinput, 2)
+        for i = 1:size(csinput, 1)
+            estimates[i, j, k] = conj(estimates[i, k, j])
+        end
+        trueval[j, k] = conj(trueval[k, j])
+    end
+    jn = computestat(Jackknife(stat()), csinput, csinput)
+    @test_approx_eq jn.trueval trueval
+    @test_approx_eq_eps jackknife_bias(jn) (size(csinput, 1)-1)*(squeeze(mean(estimates, 1), 1) - trueval) sqrt(eps())
+    @test_approx_eq jackknife_var(jn) squeeze(sum(abs2(estimates .- mean(estimates, 1)), 1), 1)*(size(csinput, 1)-1)/size(csinput, 1)
 end
 
 # Test shift predictor

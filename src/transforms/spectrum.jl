@@ -24,10 +24,10 @@ immutable CrossSpectrum <: ComplexPairwiseStatistic; end
 allocwork{T<:Complex}(::CrossSpectrum, X::AbstractVecOrMat{T}) = nothing
 computestat!{T<:Complex}(::CrossSpectrum, out::AbstractMatrix{T}, ::Nothing,
                          X::AbstractVecOrMat{T}) =
-    conjscale!(Ac_mul_A!(out, X), 1/ntrials(X, 2))
+    scale!(Ac_mul_A!(out, X), 1/ntrials(X, 2))
 
 # Two input matrices
 allocwork{T<:Complex}(::CrossSpectrum, X::AbstractVecOrMat{T}, Y::AbstractVecOrMat{T}) = nothing
 computestat!{T<:Complex}(::CrossSpectrum, out::AbstractMatrix{T}, ::Nothing,
                          X::AbstractVecOrMat{T}, Y::AbstractVecOrMat{T}) =
-    conjscale!(Ac_mul_B!(out, X, Y), 1/ntrials(X, 2))
+    scale!(Ac_mul_B!(out, X, Y), 1/ntrials(X, 2))

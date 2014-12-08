@@ -19,20 +19,6 @@ Ac_mul_A!{T}(out::StridedMatrix{T}, X::StridedVecOrMat{T}) =
 At_mul_A!{T}(out::StridedMatrix{T}, X::StridedVecOrMat{T}) =
     BLAS.syrk!('U', 'C', one(T), X, zero(T), out)
 
-# Scale and conjugate
-function conjscale!(X::AbstractArray, s::Number)
-    for i = 1:length(X)
-        @inbounds X[i] = conj(X[i])*s
-    end
-    X
-end
-function conjscale!(out::AbstractArray, X::AbstractArray, s::Number)
-    for i = 1:length(X)
-        @inbounds out[i] = conj(X[i])*s
-    end
-    X
-end
-
 # Normalize to unit circle
 function unitnormalize!{T<:Complex}(out::AbstractArray{T}, X::AbstractArray{T})
     length(out) == length(X) || error(DimensionMismatch("work size mismatch"))

@@ -120,7 +120,7 @@ allocwork{T<:Real}(t::Union(Jackknife{MeanPhaseDiff}, Jackknife{PLV}, Jackknife{
 function computestat!{T<:Real}(t::Union(Jackknife{MeanPhaseDiff}, Jackknife{PLV}, Jackknife{PPC}),
                                out::JackknifeOutput,
                                work::PLVWork{T}, X::AbstractVecOrMat{Complex{T}})
-    !t.transform.normalized && (X = unitnormalize!(work.normalizedX, X))
+    X = normalized(t.transform, work, X)
     stat = t.transform
     trueval = out.trueval
     surrogates = out.surrogates
@@ -165,11 +165,11 @@ allocwork{T<:Real}(t::Union(Jackknife{MeanPhaseDiff}, Jackknife{PLV}, Jackknife{
 function computestat!{T<:Real}(t::Union(Jackknife{MeanPhaseDiff}, Jackknife{PLV}, Jackknife{PPC}),
                                out::JackknifeOutput,
                                work::PLVWork{T}, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
-    !t.transform.normalized && (X = unitnormalize!(work.normalizedX, X))
+    X, Y = normalized(t.transform, work, X, Y)
     stat = t.transform
     trueval = out.trueval
     surrogates = out.surrogates
-    XXc = work.meanphasediff
+    XYc = work.meanphasediff
 
     chkinput(trueval, X, Y)
 

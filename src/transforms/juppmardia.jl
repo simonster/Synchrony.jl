@@ -77,7 +77,7 @@ function computestat!{T<:Real}(t::JuppMardiaR, out::AbstractMatrix{T},
                                    2*(r[c2, c1]*r[c2, s1] + r[s2, c1]*r[s2, s1])*r[c1, s1]) / 
                                   ((1-r[c1, s1]^2)*(1-r[c2, s2]^2))
         end
-        @inbounds out[j, j] = 1
+        @inbounds out[j, j] = 2
     end
     out
 end
@@ -112,12 +112,12 @@ function allocwork{T<:Real}(t::JuppMardiaR, X::AbstractVecOrMat{Complex{T}}, Y::
     end
 end
 function reimcor!(workX, invsqrtsumX, n)
-    for j = 1:2:size(workX, 2)
+    for j = 1:div(size(workX, 2), 2)
         v = zero(eltype(workX))
         @simd for i = 1:size(workX, 1)
-            @inbounds v += workX[i, j] * workX[i, j+1]
+            @inbounds v += workX[i, 2j-1] * workX[i, 2j]
         end
-        @inbounds workX[j] = v * invsqrtsumX[j] * invsqrtsumX[j+1]
+        @inbounds workX[j] = v * invsqrtsumX[2j-1] * invsqrtsumX[2j]
     end
     workX
 end
@@ -146,10 +146,10 @@ function computestat!{T<:Real}(t::JuppMardiaR, out::AbstractMatrix{T},
             c2 = 2i-1
             s2 = 2i
             @inbounds out[i, j] = ((r[c2, c1]^2 + r[s2, c1]^2 + r[c2, s1]^2 + r[s2, s1]^2) +
-                                   2*(r[c2, c1]*r[s2, s1] + r[s2, c1]*r[c2, s1])*workY[j]*workX[j] -
-                                   2*(r[c2, c1]*r[s2, c1] + r[c2, s1]*r[s2, s1])*workX[j] -
+                                   2*(r[c2, c1]*r[s2, s1] + r[s2, c1]*r[c2, s1])*workY[j]*workX[i] -
+                                   2*(r[c2, c1]*r[s2, c1] + r[c2, s1]*r[s2, s1])*workX[i] -
                                    2*(r[c2, c1]*r[c2, s1] + r[s2, c1]*r[s2, s1])*workY[j]) / 
-                                  ((1-workY[j]^2)*(1-workX[j]^2))
+                                  ((1-workY[j]^2)*(1-workX[i]^2))
         end
     end
     out
