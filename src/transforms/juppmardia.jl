@@ -15,53 +15,57 @@ immutable JuppMardiaR <: RealPairwiseStatistic
 end
 JuppMardiaR() = JuppMardiaR(false)
 
-function components_minus_means!(out, meanphasework, X)
-    sum!(meanphasework, X)
-    scale!(meanphasework, 1/size(X, 2))
-    
-    for j = 1:size(X, 2), i = 1:size(X, 1)
-        @inbounds v = X[i, j] - meanphasework[i]
-        @inbounds out[2i-1, j] = real(v)
-        @inbounds out[2i, j] = imag(v)
+function meandiff!(out, X)
+    for j = 1:size(X, 2)
+        # Compute mean resultant
+        m = zero(eltype(X))
+        @simd for i = 1:size(X, 1)
+            @inbounds m += X[i, j]
+        end
+        m /= size(X, 1)
+
+        # Compute difference from mean
+        @simd for i = 1:size(X, 1)
+            @inbounds z = X[i, j] - m
+            @inbounds out[i, 2j-1] = real(z)
+            @inbounds out[i, 2j] = imag(z)
+        end
     end
     out
 end
 
 immutable JuppMardiaRWorkX{T<:Real}
-    meanphaseX::Matrix{Complex{T}}
     workX::Matrix{T}
     covwork::Matrix{T}
     normalizedX::Matrix{Complex{T}}
 
+    JuppMardiaRWorkX(w1, w2) = new(w1, w2)
     JuppMardiaRWorkX(w1, w2, w3) = new(w1, w2, w3)
-    JuppMardiaRWorkX(w1, w2, w3, w4) = new(w1, w2, w3, w4)
 end
-function allocwork{T<:Real}(t::JuppMardiaR, X::AbstractMatrix{Complex{T}})
+function allocwork{T<:Real}(t::JuppMardiaR, X::AbstractVecOrMat{Complex{T}})
     if t.normalized
-        JuppMardiaRWorkX{T}(Array(Complex{T}, size(X, 1), 1),
-                                      Array(T, size(X, 1)*2, size(X, 2)), 
-                                      Array(T, size(X, 1)*2, size(X, 1)*2))
+        JuppMardiaRWorkX{T}(Array(T, size(X, 1), size(X, 2)*2), 
+                            Array(T, size(X, 1)*2, size(X, 1)*2))
     else
-        JuppMardiaRWorkX{T}(Array(Complex{T}, size(X, 1), 1),
-                                      Array(T, size(X, 1)*2, size(X, 2)),
-                                      Array(T, size(X, 1)*2, size(X, 1)*2),
-                                      Array(Complex{T}, size(X, 1), size(X, 2)))
+        JuppMardiaRWorkX{T}(Array(T, size(X, 1), size(X, 2)*2),
+                            Array(T, size(X, 2)*2, size(X, 2)*2),
+                            Array(Complex{T}, size(X, 1), size(X, 2)))
     end
 end
 function computestat!{T<:Real}(t::JuppMardiaR, out::AbstractMatrix{T},
                                work::JuppMardiaRWorkX{T},
-                               X::AbstractMatrix{Complex{T}})
-    size(out, 1) == size(out, 2) == size(X, 1) || error(DimensionMismatch("out"))
+                               X::AbstractVecOrMat{Complex{T}})
+    chkinput(out, X)
     X = normalized(t, work, X)
 
     # Compute mean phases
-    workX = components_minus_means!(work.workX, work.meanphaseX, X)
+    workX = meandiff!(work.workX, X)
 
     # Correlation between all components
-    r = A_mul_At!(work.covwork, workX)
+    r = At_mul_A!(work.covwork, workX)
     cov2coh!(r)
 
-    for j = 1:size(X, 1)
+    for j = 1:nchannels(X)
         c1 = 2j-1
         s1 = 2j
         for i = 1:j-1
@@ -79,71 +83,66 @@ function computestat!{T<:Real}(t::JuppMardiaR, out::AbstractMatrix{T},
 end
 
 immutable JuppMardiaRWorkXY{T<:Real}
-    meanphaseX::Matrix{Complex{T}}
-    meanphaseY::Matrix{Complex{T}}
     workX::Matrix{T}
     workY::Matrix{T}
     covwork::Matrix{T}
+    invsqrtsumX::Matrix{T}
+    invsqrtsumY::Matrix{T}
     normalizedX::Matrix{Complex{T}}
     normalizedY::Matrix{Complex{T}}
 
     JuppMardiaRWorkXY(w1, w2, w3, w4, w5) = new(w1, w2, w3, w4, w5)
     JuppMardiaRWorkXY(w1, w2, w3, w4, w5, w6, w7) = new(w1, w2, w3, w4, w5, w6, w7)
 end
-function allocwork{T<:Real}(t::JuppMardiaR, X::AbstractMatrix{Complex{T}}, Y::AbstractMatrix{Complex{T}})
+function allocwork{T<:Real}(t::JuppMardiaR, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
     if t.normalized
-        JuppMardiaRWorkXY{T}(Array(Complex{T}, size(X, 1), 1),
-                             Array(Complex{T}, size(Y, 1), 1),
-                             Array(T, size(X, 1)*2, size(X, 2)),
-                             Array(T, size(X, 1)*2, size(Y, 2)),
-                             Array(T, size(X, 1)*2, size(Y, 1)*2))
+        JuppMardiaRWorkXY{T}(Array(T, size(X, 1), size(X, 2)*2),
+                             Array(T, size(Y, 1), size(Y, 2)*2),
+                             Array(T, size(X, 2)*2, size(Y, 2)*2),
+                             Array(T, size(X, 2)*2),
+                             Array(T, size(Y, 2)*2))
     else
-        JuppMardiaRWorkXY{T}(Array(Complex{T}, size(X, 1), 1),
-                             Array(Complex{T}, size(Y, 1), 1),
-                             Array(T, size(X, 1)*2, size(X, 2)),
-                             Array(T, size(Y, 1)*2, size(Y, 2)),
-                             Array(T, size(X, 1)*2, size(Y, 1)*2),
+        JuppMardiaRWorkXY{T}(Array(T, size(X, 1), size(X, 2)*2),
+                             Array(T, size(Y, 1), size(Y, 2)*2),
+                             Array(T, size(X, 2)*2, size(Y, 2)*2),
+                             Array(T, 1, size(X, 2)*2),
+                             Array(T, 1, size(Y, 2)*2),
                              Array(Complex{T}, size(X, 1), size(X, 2)),
                              Array(Complex{T}, size(X, 1), size(Y, 2)))
     end
 end
 function reimcor!(workX, invsqrtsumX, n)
-    for i = 1:n
-        @inbounds workX[i] = workX[2i-1] * workX[2i]
+    for j = 1:2:size(workX, 2)
+        v = zero(eltype(workX))
+        @simd for i = 1:size(workX, 1)
+            @inbounds v += workX[i, j] * workX[i, j+1]
+        end
+        @inbounds workX[j] = v * invsqrtsumX[j] * invsqrtsumX[j+1]
     end
-    for j = 2:size(workX, 2), i = 1:n
-        @inbounds workX[i] += workX[2i-1, j] * workX[2i, j]
-    end
-    for i = 1:n
-        @inbounds workX[i] *= invsqrtsumX[2i-1]*invsqrtsumX[2i]
-    end
+    workX
 end
 function computestat!{T<:Real}(t::JuppMardiaR, out::AbstractMatrix{T},
                                work::JuppMardiaRWorkXY{T},
-                               X::AbstractMatrix{Complex{T}}, Y::AbstractMatrix{Complex{T}})
-    size(out, 1) == size(out, 2) == size(X, 1) || error(DimensionMismatch("out"))
+                               X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
+    chkinput(out, X, Y)
     X, Y = normalized(t, work, X, Y)
 
     # Compute mean phases
-    meanphaseX = work.meanphaseX
-    workX = components_minus_means!(work.workX, meanphaseX, X)
-    meanphaseY = work.meanphaseY
-    workY = components_minus_means!(work.workY, meanphaseY, Y)
+    workX = meandiff!(work.workX, X)
+    workY = meandiff!(work.workY, Y)
 
     # Correlation between signals
-    r = A_mul_Bt!(work.covwork, workX, workY)
-    invsqrtsumX = reinterpret(T, meanphaseX, (2*size(X, 1),))
-    invsqrtsumY = reinterpret(T, meanphaseY, (2*size(Y, 1),))
-    cov2coh!(r, workX, workY, invsqrtsumX, invsqrtsumY, r)
+    r = At_mul_B!(work.covwork, workX, workY)
+    cov2coh!(r, workX, workY, work.invsqrtsumX, work.invsqrtsumY, r)
 
     # Correlation between real and imaginary components of each signal
-    reimcor!(workX, invsqrtsumX, size(X, 1))
-    reimcor!(workY, invsqrtsumY, size(Y, 1))
+    reimcor!(workX, work.invsqrtsumX, size(X, 1))
+    reimcor!(workY, work.invsqrtsumY, size(Y, 1))
 
-    for j = 1:size(Y, 1)
+    for j = 1:nchannels(Y)
         c1 = 2j-1
         s1 = 2j
-        for i = 1:size(X, 1)
+        for i = 1:nchannels(X)
             c2 = 2i-1
             s2 = 2i
             @inbounds out[i, j] = ((r[c2, c1]^2 + r[s2, c1]^2 + r[c2, s1]^2 + r[s2, s1]^2) +

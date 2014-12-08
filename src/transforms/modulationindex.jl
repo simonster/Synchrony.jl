@@ -1,11 +1,11 @@
 #
 # Entropy-based cross frequency coupling
 #
-# See:
-# Hurtado, J. M., Rubchinsky, L. L., & Sigvardt, K. A. (2004).
+# See Hurtado, J. M., Rubchinsky, L. L., & Sigvardt, K. A. (2004).
 # Statistical Method for Detection of Phase-Locking Episodes in Neural
 # Oscillations. Journal of Neurophysiology, 91(4), 1883–1898.
 # doi:10.1152/jn.00853.2003
+#
 # Tort, A. B. L., Kramer, M. A., Thorn, C., Gibson, D. J., Kubota, Y.,
 # Graybiel, A. M., & Kopell, N. J. (2008). Dynamic cross-frequency
 # couplings of local field potential oscillations in rat striatum and
@@ -17,52 +17,60 @@ immutable HurtadoModulationIndex <: RealPairwiseStatistic
 end
 HurtadoModulationIndex() = HurtadoModulationIndex(18)
 
-allocwork{T<:Real}(t::HurtadoModulationIndex, X::AbstractMatrix{Complex{T}}, Y::AbstractMatrix{Complex{T}}) =
-    (Array(Uint8, size(X, 1)), Array(Int, t.nbins, size(X, 1)),
-     Array(Float64, t.nbins, size(X, 1), size(Y, 1)),
-     Array(Float64, t.nbins))
+allocwork{T<:Real}(t::HurtadoModulationIndex, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
+    (Array(Uint8, size(X, 1), size(X, 2)), Array(Int, t.nbins, nchannels(X)),
+     Array(T, size(Y, 1), size(Y, 2)), Array(Float64, t.nbins))
 function computestat!{T<:Real}(t::HurtadoModulationIndex, out::AbstractMatrix{T},
-                               work::(Array{Uint8, 1}, Array{Int, 2}, Array{Float64, 3},
-                                      Vector{Float64}),
-                               X::AbstractMatrix{Complex{T}}, Y::AbstractMatrix{Complex{T}})
+                               work::(Matrix{Uint8}, Matrix{Int}, Matrix{T}, Vector{Float64}),
+                               X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
     nbins = t.nbins
     phasebin = work[1]
     ninbin = work[2]
-    ampsum = work[3]
+    amp = work[3]
     meanamp = work[4]
-    fill!(ninbin, 0)
-    fill!(ampsum, zero(T))
+    chkinput(out, X, Y)
 
+    # Bin phases
+    fill!(ninbin, uint8(0))
     m = nbins/2pi
-    for j = 1:size(X, 2)
-        for i = 1:size(X, 1)
-            @inbounds bin = phasebin[i] = ceil(Uint8, (angle(X[i, j])+pi)*m)
-            @inbounds ninbin[bin, i] += 1
-        end
-        
-        for iampchan = 1:size(Y, 1)
-            @inbounds amp = abs(Y[iampchan, j])
-            for iphasechan = 1:size(X, 1)
-                @inbounds ampsum[phasebin[iphasechan], iphasechan, iampchan] += amp
-            end
-        end
+    for j = 1:size(X, 2), i = 1:size(X, 1)
+        @inbounds bin = phasebin[i, j] = ceil(Uint8, (angle(X[i, j])+pi)*m)
+        @inbounds ninbin[bin, j] += 1
     end
 
     hmax = log(float64(nbins))
-    for iampchan = 1:size(Y, 1), iphasechan = 1:size(X, 1)
-        d = zero(T)/1+zero(T)/1
-        for ibin = 1:nbins
-            d += meanamp[ibin] = ampsum[ibin, iphasechan, iampchan]/ninbin[ibin, iphasechan]
-        end
-        d = inv(d)
-
-        h = zero(T)/1+zero(T)/1
-        for ibin = 1:nbins
-            p = meanamp[ibin]*d
-            h -= p*log(p)
+    # Compute phase-amplitude coupling
+    for k = 1:size(Y, 2)
+        # Compute amplitudes
+        for i = 1:size(X, 1)
+            @inbounds amp[i] = abs(Y[i, k])
         end
 
-        out[iphasechan, iampchan] = (hmax - h)/hmax
+        for j = 1:size(X, 2)
+            fill!(meanamp, zero(T))
+
+            # Compute sum of amplitudes for each phase bin
+            @simd for i = 1:size(X, 1)
+                @inbounds meanamp[phasebin[i]] += amp[i]
+            end
+
+            # Normalize to mean amplitudes
+            d = zero(T)
+            for ibin = 1:nbins
+                d += meanamp[ibin] /= ninbin[ibin]
+            end
+            d = inv(d)
+
+            # Compute h
+            h = zero(T)
+            for ibin = 1:nbins
+                p = meanamp[ibin]*d
+                h -= p*log(p)
+            end
+
+            # Compute modulation index
+            out[j, k] = (hmax - h)/hmax
+        end
     end
 
     out

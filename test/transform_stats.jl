@@ -1,4 +1,4 @@
-using Synchrony, Base.Test, CrossDecomposition
+using Synchrony2, Base.Test, CrossDecomposition
 
 # Tests for statistics determined by cross spectrum
 angles = [
@@ -52,7 +52,7 @@ end
 true_wpli2debiased = mean(pairs)./mean(abs(pairs))
 
 oneinput = ones(Complex128, length(angles))
-csinput = [oneinput expcoef].'
+csinput = [oneinput expcoef]
 
 # Single input
 @test_approx_eq computestat(Coherency(), csinput)[1, 2] true_coh
@@ -65,14 +65,14 @@ csinput = [oneinput expcoef].'
 @test_approx_eq computestat(WPLI2Debiased(), csinput)[1, 2] true_wpli2debiased
 
 # Two input
-@test_approx_eq computestat(Coherency(), oneinput.', expcoef.')[1] true_coh
-@test_approx_eq computestat(Coherence(), oneinput.', expcoef.')[1] abs(true_coh)
-@test_approx_eq computestat(PLV(), oneinput.', expcoef.')[1] true_plv
-@test_approx_eq computestat(PPC(), oneinput.', expcoef.')[1] true_ppc
-@test_approx_eq computestat(PLI(), oneinput.', expcoef.')[1] true_pli
-@test_approx_eq computestat(PLI2Unbiased(), oneinput.', expcoef.')[1] true_pli2unbiased
-@test_approx_eq computestat(WPLI(), oneinput.', expcoef.')[1] true_wpli
-@test_approx_eq computestat(WPLI2Debiased(), oneinput.', expcoef.')[1] true_wpli2debiased
+@test_approx_eq computestat(Coherency(), oneinput, expcoef)[1] true_coh
+@test_approx_eq computestat(Coherence(), oneinput, expcoef)[1] abs(true_coh)
+@test_approx_eq computestat(PLV(), oneinput, expcoef)[1] true_plv
+@test_approx_eq computestat(PPC(), oneinput, expcoef)[1] true_ppc
+@test_approx_eq computestat(PLI(), oneinput, expcoef)[1] true_pli
+@test_approx_eq computestat(PLI2Unbiased(), oneinput, expcoef)[1] true_pli2unbiased
+@test_approx_eq computestat(WPLI(), oneinput, expcoef)[1] true_wpli
+@test_approx_eq computestat(WPLI2Debiased(), oneinput, expcoef)[1] true_wpli2debiased
 
 # Test Jammalamadaka circular correlation
 angles = [
@@ -102,8 +102,8 @@ aabar = sin(angles[:, 1] .- abar)
 bbbar = sin(angles[:, 2] .- bbar)
 true_ccor = sum(aabar.*bbbar)/sqrt(sum(abs2(aabar)).*sum(abs2(bbbar)))
 
-@test_approx_eq computestat(JammalamadakaR(), expi.')[1, 2] true_ccor
-@test_approx_eq computestat(JammalamadakaR(), expi[:, 1].', expi[:, 2].')[1] true_ccor
+@test_approx_eq computestat(JammalamadakaR(), expi)[1, 2] true_ccor
+@test_approx_eq computestat(JammalamadakaR(), expi[:, 1], expi[:, 2])[1] true_ccor
 
 # Test Jupp and Mardia circular correlation
 am = [real(expi[:, 1]) imag(expi[:, 1])]
@@ -116,8 +116,8 @@ true_ccor = sum(abs2(cor(canoncor(am, bm))))
 #          cor(imag(expi[:, 1]), imag(expi[:, 2])),
 #          cor(real(expi[:, 1]), imag(expi[:, 1])),
 #          cor(real(expi[:, 2]), imag(expi[:, 2]))))
-@test_approx_eq computestat(JuppMardiaR(), expi.')[1, 2] true_ccor
-@test_approx_eq computestat(JuppMardiaR(), expi[:, 1].', expi[:, 2].')[1] true_ccor
+@test_approx_eq computestat(JuppMardiaR(), expi)[1, 2] true_ccor
+@test_approx_eq computestat(JuppMardiaR(), expi[:, 1], expi[:, 2])[1] true_ccor
 
 # Test Hurtado modulation index
 # Create two signals with some phase-amplitude coupling
@@ -134,7 +134,7 @@ end
 s1 = exp(im*2pi*[0.05:.1:10]).*repmat([0.05:.1:1], 10)
 s2 = exp(im*2pi*[1/18:1/9:11+1/18]).*repmat([0.99, ones(9)*0.01], 10)
 
-out = computestat(HurtadoModulationIndex(10), s1', s2')
+out = computestat(HurtadoModulationIndex(10), s1, s2)
 @test_approx_eq out[1] dumbcfc(s1, s2, 10)
 
 # Test jackknife
@@ -142,12 +142,12 @@ for stat in (Coherence, Coherency, PLV, PPC)
     trueval = computestat(stat(), csinput)
     jn = computestat(Jackknife(stat()), csinput)
     @test_approx_eq jn.trueval trueval
-    estimates = zeros(eltype(trueval), size(csinput, 1), size(csinput, 1), size(csinput, 2))
-    for i = 1:size(csinput, 2)
-        estimates[:, :, i] = computestat(stat(), csinput[:, [1:i-1, i+1:size(csinput, 2)]])
+    estimates = zeros(eltype(trueval), size(csinput, 2), size(csinput, 2), size(csinput, 1))
+    for i = 1:size(csinput, 1)
+        estimates[:, :, i] = computestat(stat(), csinput[[1:i-1, i+1:size(csinput, 1)], :])
     end
-    @test_approx_eq_eps jackknife_bias(jn) (size(csinput, 2)-1)*(mean(estimates, 3) - trueval) sqrt(eps())
-    @test_approx_eq jackknife_var(jn) sum(abs2(estimates .- mean(estimates, 3)), 3)*(size(csinput, 2)-1)/size(csinput, 2)
+    @test_approx_eq_eps jackknife_bias(jn) (size(csinput, 1)-1)*(mean(estimates, 3) - trueval) sqrt(eps())
+    @test_approx_eq jackknife_var(jn) sum(abs2(estimates .- mean(estimates, 3)), 3)*(size(csinput, 1)-1)/size(csinput, 1)
 end
 
 # Test shift predictor

@@ -16,20 +16,24 @@ immutable MeanPhaseDiffWork{T<:Real}
     MeanPhaseDiffWork(x, y) = new(x, y)
 end
 
-allocwork{T<:Real}(t::MeanPhaseDiff, X::AbstractMatrix{Complex{T}}) =
+# Single input matrix
+allocwork{T<:Real}(t::MeanPhaseDiff, X::AbstractVecOrMat{Complex{T}}) =
     t.normalized ? MeanPhaseDiffWork{T}() : MeanPhaseDiffWork{T}(Array(Complex{T}, size(X)))
+_finish(::MeanPhaseDiff, x, n) = x/n
 function computestat!{T<:Real}(t::MeanPhaseDiff, out::AbstractMatrix{Complex{T}},
-                               work::MeanPhaseDiffWork{T}, X::AbstractMatrix{Complex{T}})
-    conjscale!(A_mul_Ac!(out, normalized(t, work, X)), 1/size(X, 2))
+                               work::MeanPhaseDiffWork{T}, X::AbstractVecOrMat{Complex{T}})
+    scale!(Ac_mul_A!(out, normalized(t, work, X)), 1/ntrials(X))
 end
 
-allocwork{T<:Real}(t::MeanPhaseDiff, X::AbstractMatrix{Complex{T}}, Y::AbstractMatrix{Complex{T}}) =
+# Two input matrices
+allocwork{T<:Real}(t::MeanPhaseDiff, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
     t.normalized ? MeanPhaseDiffWork{T}() :
         MeanPhaseDiffWork{T}(Array(Complex{T}, size(X)), Array(Complex{T}, size(Y)))
+_finish_xy!(::MeanPhaseDiff, out, work, n) = scale!(out, work, 1/n)
 function computestat!{T<:Real}(t::MeanPhaseDiff, out::AbstractMatrix{Complex{T}},
-                               work::MeanPhaseDiffWork{T}, X::AbstractMatrix{Complex{T}})
+                               work::MeanPhaseDiffWork{T}, X::AbstractVecOrMat{Complex{T}})
     X, Y = normalized(t, work, X, Y)
-    conjscale!(A_mul_Bc!(out, X, Y), 1/size(X, 2))
+    scale!(Ac_mul_B!(out, X, Y), 1/ntrials(X))
 end
 
 #
@@ -65,103 +69,128 @@ immutable PLVWork{T<:Real}
     PLVWork(w1, w2, w3) = new(w1, w2, w3)
 end
 
-allocwork{T<:Real}(t::Union(PLV, PPC), X::AbstractMatrix{Complex{T}}) =
-    t.normalized ? PLVWork{T}(Array(Complex{T}, size(X, 1), size(X, 1))) :
-        PLVWork{T}(Array(Complex{T}, size(X, 1), size(X, 1)),
-                   Array(Complex{T}, size(X)))
-function _finish!(::PLV, out, work, n)
-    for j = 1:size(out, 1)
-        for i = 1:j-1
-            @inbounds out[i, j] = abs(work[i, j])/n
-        end
-        @inbounds out[j, j] = one(eltype(out))
-    end
-    out
-end
-function _finish!(::PPC, out, work, n)
-    for j = 1:size(out, 1)
-        for i = 1:j-1
-            @inbounds out[i, j] = abs2(work[i, j])/(n*(n-1)) - 1/(n-1)
-        end
-        @inbounds out[j, j] = one(eltype(out))
+# Computes the result value based on the element of the matrix product
+# (x) and the number of samples (n)
+_finish(::PLV, x, n) = abs(x)/n
+_finish(::PPC, x, n) = abs2(x)/(n*(n-1)) - 1/(n-1)
+
+# Single input matrix
+allocwork{T<:Real}(t::Union(PLV, PPC), X::AbstractVecOrMat{Complex{T}}) =
+    t.normalized ? PLVWork{T}(Array(Complex{T}, nchannels(X), nchannels(X))) :
+        PLVWork{T}(Array(Complex{T}, nchannels(X), nchannels(X)),
+                   Array(Complex{T}, size(X, 1), size(X, 2)))
+function _finish!(t::PairwiseStatistic, out, work, n)
+    for j = 1:size(out, 1), i = 1:j
+        @inbounds out[i, j] = _finish(t, work[i, j], n)
     end
     out
 end
 function computestat!{T<:Real}(t::Union(PLV, PPC), out::AbstractMatrix{T}, work::PLVWork{T},
-                               X::AbstractMatrix{Complex{T}})
-    size(out, 1) == size(out, 2) == size(X, 1) || error(DimensionMismatch("out"))
-    fill!(out, zero(T))
-    _finish!(t, out, A_mul_Ac!(work.meanphasediff, normalized(t, work, X)), size(X, 2))
+                               X::AbstractVecOrMat{Complex{T}})
+    chkinput(out, X)
+    _finish!(t, out, Ac_mul_A!(work.meanphasediff, normalized(t, work, X)), ntrials(X))
 end
 
-allocwork{T<:Real}(t::Union(PLV, PPC), X::AbstractMatrix{Complex{T}}, Y::AbstractMatrix{Complex{T}}) =
-    t.normalized ? PLVWork{T}(Array(Complex{T}, size(X, 1), size(Y, 1))) :
-        PLVWork{T}(Array(Complex{T}, size(X, 1), size(Y, 1)),
-                   Array(Complex{T}, size(X)), Array(Complex{T}, size(Y)))
-function _finish_xy!(::PLV, out, work, n)
+# Two input matrices
+allocwork{T<:Real}(t::Union(PLV, PPC), X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
+    t.normalized ? PLVWork{T}(Array(Complex{T}, nchannels(X), nchannels(Y))) :
+        PLVWork{T}(Array(Complex{T}, nchannels(X), nchannels(Y)),
+                   Array(Complex{T}, size(X, 1), size(X, 2)),
+                   Array(Complex{T}, size(Y, 1), size(Y, 2)))
+function _finish_xy!(t::PairwiseStatistic, out, work, n)
     for i = 1:length(out)
-        @inbounds out[i] = abs(work[i])/n
-    end
-    out
-end
-function _finish_xy!(::PPC, out, work, n)
-    for i = 1:length(out)
-        @inbounds out[i] = abs2(work[i])/(n*(n-1)) - 1/(n-1)
+        @inbounds out[i] = _finish(t, work[i], n)
     end
     out
 end
 function computestat!{T<:Real}(t::Union(PLV, PPC), out::AbstractMatrix{T}, work::PLVWork{T},
-                               X::AbstractMatrix{Complex{T}}, Y::AbstractMatrix{Complex{T}})
-    size(out, 1) == size(X, 1) && size(out, 2) == size(X, 1) || error(DimensionMismatch("out"))
+                               X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
+    chkinput(out, X, Y)
     X, Y = normalized(t, work, X, Y)
-    _finish_xy!(t, out, A_mul_Bc!(work.meanphasediff, X, Y), size(X, 2))
+    _finish_xy!(t, out, Ac_mul_B!(work.meanphasediff, X, Y), ntrials(X))
 end
 
-
+#
 # Jackknifing for MeanPhaseDiff/PLV/PPC
+#
+
+# Single input matrix
 allocwork{T<:Real}(t::Union(Jackknife{MeanPhaseDiff}, Jackknife{PLV}, Jackknife{PPC}),
-                   X::AbstractMatrix{Complex{T}}) = allocwork(PLV(), X)
+                   X::AbstractVecOrMat{Complex{T}}) = allocwork(PLV(), X)
 function computestat!{T<:Real}(t::Union(Jackknife{MeanPhaseDiff}, Jackknife{PLV}, Jackknife{PPC}),
                                out::JackknifeOutput,
-                               work::PLVWork{T}, X::AbstractMatrix{Complex{T}})
-    size(out.trueval, 1) == size(out.trueval, 2) == size(X, 1) || error(DimensionMismatch("out"))
+                               work::PLVWork{T}, X::AbstractVecOrMat{Complex{T}})
     !t.transform.normalized && (X = unitnormalize!(work.normalizedX, X))
-
     stat = t.transform
     trueval = out.trueval
     surrogates = out.surrogates
     XXc = work.meanphasediff
 
-    A_mul_Bc!(XXc, X, X)
+    chkinput(trueval, X)
 
-    n = size(X, 2)
-    fill!(trueval, zero(T))
-    if isa(t, Jackknife{MeanPhaseDiff})
-        conjscale!(trueval, XXc, 1/n)
-    else
-        _finish!(t.transform, trueval, XXc, n)
-    end
+    Ac_mul_A!(XXc, X)
+
+    n = ntrials(X)
+    _finish!(t.transform, trueval, XXc, n)
 
     invnm1 = inv(n-1)
     invnm2 = inv(n-2)
     invppc = inv((n-1)*(n-2))
     @inbounds for k = 1:size(X, 2)
-        surrogates[1, 1, k] = one(T)
-        for j = 2:size(X, 1)
-            z = conj(X[j, k])
-            for i = 1:j-1
-                v = XXc[i, j] - X[i, j]*z
+        for j = 1:k-1
+            x = XXc[j, k]
+            for i = 1:size(X, 1)
+                v = x - conj(X[i, j])*X[i, k]
                 if isa(t, Jackknife{MeanPhaseDiff})
-                    surrogates[i, j, k] = conj(v)*invnm1
+                    surrogates[i, j, k] = v*invnm1
                 elseif isa(t, Jackknife{PLV})
                     surrogates[i, j, k] = abs(v)*invnm1
                 elseif isa(t, Jackknife{PPC})
                     surrogates[i, j, k] = abs2(v)*invppc - invnm2
                 end
             end
-            surrogates[j, j, k] = one(T)
-            for i = j+1:size(X, 1)
-                surrogates[i, j, k] = zero(T)
+        end
+        for i = 1:size(X, 1)
+            surrogates[i, k, k] = 1
+        end
+    end
+
+    out
+end
+
+# Two input matrices
+allocwork{T<:Real}(t::Union(Jackknife{MeanPhaseDiff}, Jackknife{PLV}, Jackknife{PPC}),
+                   X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
+    allocwork(PLV(), X, Y)
+function computestat!{T<:Real}(t::Union(Jackknife{MeanPhaseDiff}, Jackknife{PLV}, Jackknife{PPC}),
+                               out::JackknifeOutput,
+                               work::PLVWork{T}, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
+    !t.transform.normalized && (X = unitnormalize!(work.normalizedX, X))
+    stat = t.transform
+    trueval = out.trueval
+    surrogates = out.surrogates
+    XXc = work.meanphasediff
+
+    chkinput(trueval, X, Y)
+
+    Ac_mul_B!(XYc, X, Y)
+
+    n = ntrials(X)
+    _finish_xy!(t.transform, trueval, XYc, n)
+
+    invnm1 = inv(n-1)
+    invnm2 = inv(n-2)
+    invppc = inv((n-1)*(n-2))
+    @inbounds for k = 1:size(Y, 2), j = 1:size(X, 2)
+        x = XYc[j, k]
+        for i = 1:size(X, 1)
+            v = x - conj(X[i, j])*Y[i, k]
+            if isa(t, Jackknife{MeanPhaseDiff})
+                surrogates[i, j, k] = v*invnm1
+            elseif isa(t, Jackknife{PLV})
+                surrogates[i, j, k] = abs(v)*invnm1
+            elseif isa(t, Jackknife{PPC})
+                surrogates[i, j, k] = abs2(v)*invppc - invnm2
             end
         end
     end
