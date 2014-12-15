@@ -36,11 +36,8 @@ function cov2coh!{T<:Real}(out::Union(AbstractMatrix{Complex{T}}, AbstractMatrix
     size(out, 1) == size(out, 2) == size(XXc, 2) ||
         error(DimensionMismatch("output size mismatch"))
 
-    for i = 1:size(XXc, 2)
-        @inbounds out[i, i] = 1/sqrt(real(XXc[i, i]))
-    end
     for j = 1:size(XXc, 2)
-        x = real(out[j, j])
+        out[j, j] = x = 1/sqrt(real(XXc[j, j]))
         for i = 1:j-1
             @inbounds out[i, j] = f(XXc[i, j])*(real(out[i, i])*x)
         end
@@ -65,7 +62,7 @@ function cov2coh!{T<:Real}(out::Union(AbstractMatrix{Complex{T}}, AbstractMatrix
     for i = 1:length(Xtmp)
         Xtmp[i] = 1/sqrt(Xtmp[i])
     end
-    for i = 1:length(Xtmp)
+    for i = 1:length(Ytmp)
         Ytmp[i] = 1/sqrt(Ytmp[i])
     end
 
@@ -82,12 +79,13 @@ immutable UnsafeSubMatrix{T<:Number} <: DenseMatrix{T}
     ncol::Int
 end
 Base.getindex(X::UnsafeSubMatrix, i::Int) = unsafe_load(X.ptr, i)
-Base.getindex(X::UnsafeSubMatrix, i::Int, j::Int) = unsafe_load(X.ptr, x.nrow*(j-1)+i)
+Base.getindex(X::UnsafeSubMatrix, i::Int, j::Int) = unsafe_load(X.ptr, X.nrow*(j-1)+i)
 Base.setindex!{T}(X::UnsafeSubMatrix{T}, x, i::Int) = unsafe_store!(X.ptr, convert(T, x), i)
 Base.setindex!{T}(X::UnsafeSubMatrix{T}, x, i::Int, j::Int) = unsafe_store!(X.ptr, convert(T, x), x.nrow*(j-1)+i)
 Base.pointer(X::UnsafeSubMatrix) = X.ptr
 Base.convert{T}(::Type{Ptr{T}}, X::UnsafeSubMatrix) = X.ptr
 Base.size(X::UnsafeSubMatrix) = X.nrow, X.ncol
+Base.similar(X::UnsafeSubMatrix, T, dims) = Array(T, dims)
 
 immutable ConjFun <: Base.Func{1} end
 call(::ConjFun, x) = conj(x)
@@ -100,7 +98,7 @@ chkout(out, X) = size(out, 1) == size(out, 2) == size(X, 2) ||
 chkout(out, X, Y) = (size(out, 1) == size(X, 2) && size(out, 2) == size(Y, 2)) ||
     error(DimensionMismatch("output size mismatch"))
 chkinput(out, X) = chkout(out, X)
-chkinput(out, X, Y) = (chkXY(X, Y); chkout(out, X))
+chkinput(out, X, Y) = (chkXY(X, Y); chkout(out, X, Y))
 
 #
 # Types and basics
@@ -134,19 +132,19 @@ computestat(t::Statistic, X::AbstractArray) =
 computestat(t::Statistic, X::AbstractArray, Y::AbstractArray) =
     computestat!(t, allocoutput(t, X, Y), allocwork(t, X, Y), X, Y)
 
-allocwork(t::Statistic, X::AbstractVecOrMat) =
+allocwork{T<:Real}(t::Statistic, X::AbstractVecOrMat{Complex{T}}) =
     error("allocwork($(typeof(t)), X) not defined")
-allocwork(t::Statistic, X::AbstractVecOrMat, Y::AbstractVecOrMat) =
+allocwork{T<:Real}(t::Statistic, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
     error("allocwork($(typeof(t)), X, Y) not defined")
-allocwork(t, X::AbstractArray) = allocwork(t, UnsafeSubMatrix(pointer(X), size(X, 2), size(X, 2)))
-function allocwork(t, X::AbstractArray, Y::AbstractArray)
+allocwork{T<:Real}(t::Statistic, X::AbstractArray{Complex{T}}) = allocwork(t, UnsafeSubMatrix(pointer(X), size(X, 2), size(X, 2)))
+function allocwork(t::Statistic, X::AbstractArray, Y::AbstractArray)
     allocwork(t, UnsafeSubMatrix(pointer(X), size(X, 2), size(X, 2)),
                  UnsafeSubMatrix(pointer(Y), size(Y, 2), size(Y, 2)))
 end
 
 for n = 3:6
     @eval begin
-        allocoutput{T<:Complex}(t, X::AbstractArray{T,$n}, Y::AbstractArray{T,$n}=X) =
+        allocoutput{T<:Complex}(t::Statistic, X::AbstractArray{T,$n}, Y::AbstractArray{T,$n}=X) =
             zeros(eltype(t, X), size(X, 2), size(Y, 2), $([:(size(X, i)) for i = 3:n]...))
     end
 end
@@ -210,8 +208,12 @@ immutable JackknifeOutput{T<:Array,S<:Array}
 end
 
 function copyrows!(out, outrow, X, rowinds)
-    for j = 1:size(X, 2), i = 1:length(rowinds)
-        @inbounds out[outrow+i-1, j] = X[rowinds[i], j]
+    for j = 1:size(X, 2)
+        i = 1
+        for x in rowinds
+            @inbounds out[outrow+i-1, j] = X[x, j]
+            i += 1
+        end
     end
     out
 end
@@ -347,7 +349,7 @@ end
 jackknife_bias(jn::JackknifeOutput) = jackknife_bias!(similar(jn.trueval), jn)
 
 # Jackknifing of n-d arrays
-function computestat!{S,T<:Complex}(t::Statistic, out::JackknifeOutput, work::S, X::AbstractArray{T})
+function computestat!{S,T<:Complex}(t::Jackknife, out::JackknifeOutput, work::S, X::AbstractArray{T})
     trueval = out.trueval
     surrogates = out.surrogates
     !isempty(X) || error(ArgumentError("X is empty"))
@@ -366,6 +368,17 @@ function computestat!{S,T<:Complex}(t::Statistic, out::JackknifeOutput, work::S,
     end
     out
 end
+
+#
+# Bootstrapping
+#
+
+immutable Bootstrap{R<:Statistic} <: Statistic
+    transform::R
+    weights::Matrix{Int32}    # Sample weights for each bootstrap. nbootstraps x ntrials
+end
+
+
 
 #
 # Transforms
