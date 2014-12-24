@@ -81,7 +81,7 @@ end
 Base.getindex(X::UnsafeSubMatrix, i::Int) = unsafe_load(X.ptr, i)
 Base.getindex(X::UnsafeSubMatrix, i::Int, j::Int) = unsafe_load(X.ptr, X.nrow*(j-1)+i)
 Base.setindex!{T}(X::UnsafeSubMatrix{T}, x, i::Int) = unsafe_store!(X.ptr, convert(T, x), i)
-Base.setindex!{T}(X::UnsafeSubMatrix{T}, x, i::Int, j::Int) = unsafe_store!(X.ptr, convert(T, x), x.nrow*(j-1)+i)
+Base.setindex!{T}(X::UnsafeSubMatrix{T}, x, i::Int, j::Int) = unsafe_store!(X.ptr, convert(T, x), X.nrow*(j-1)+i)
 Base.pointer(X::UnsafeSubMatrix) = X.ptr
 Base.convert{T}(::Type{Ptr{T}}, X::UnsafeSubMatrix) = X.ptr
 Base.size(X::UnsafeSubMatrix) = X.nrow, X.ncol
@@ -145,7 +145,7 @@ end
 for n = 3:6
     @eval begin
         allocoutput{T<:Complex}(t::Statistic, X::AbstractArray{T,$n}, Y::AbstractArray{T,$n}=X) =
-            zeros(eltype(t, X), size(X, 2), size(Y, 2), $([:(size(X, i)) for i = 3:n]...))
+            zeros(eltype(t, X), size(X, 2), size(Y, 2), $([:(size(X, $i)) for i = 3:n]...))
     end
 end
 
@@ -156,12 +156,12 @@ computestat!{T<:Complex}(t::Statistic, out::AbstractArray, work, X::AbstractVecO
 function computestat!{T<:Complex}(t::Statistic, out::AbstractArray, work, X::AbstractArray{T})
     !isempty(X) || error(ArgumentError("X is empty"))
     lead = size(X, 1)*size(X, 2)
-    leadout = size(X, 1)*size(X, 1)
+    leadout = size(X, 2)*size(X, 2)
     trail = Base.trailingsize(X, 3)
     Base.trailingsize(out, 3) == trail || error(DimensionMismatch("output size mismatch"))
 
     for i = 1:trail
-        computestat!(t, UnsafeSubMatrix(pointer(out, leadout*(i-1)+1), size(out, 2), size(out, 2)),
+        computestat!(t, UnsafeSubMatrix(pointer(out, leadout*(i-1)+1), size(out, 1), size(out, 2)),
                      work, UnsafeSubMatrix(pointer(X, lead*(i-1)+1), size(X, 1), size(X, 2)))
     end
     out
@@ -170,7 +170,7 @@ end
 function computestat!{T<:Complex}(t::Statistic, out::AbstractArray, work, X::AbstractArray{T}, Y::AbstractArray{T})
     leadX = size(X, 1)*size(X, 2)
     leadY = size(Y, 1)*size(Y, 2)
-    leadout = size(X, 1)*size(X, 1)
+    leadout = size(X, 2)*size(Y, 2)
     trail = Base.trailingsize(X, 3)
     Base.trailingsize(Y, 3) == trail || error(DimensionMismatch("X and Y must have same trailing dimensions"))
     Base.trailingsize(out, 3) == trail || error(DimensionMismatch("output size mismatch"))
@@ -202,7 +202,7 @@ end
 immutable Jackknife{R<:Statistic} <: Statistic
     transform::R
 end
-immutable JackknifeOutput{T<:Array,S<:Array}
+immutable JackknifeOutput{T<:StridedArray,S<:StridedArray}
     trueval::T
     surrogates::S
 end
@@ -221,8 +221,8 @@ end
 for n = 2:6
     @eval begin
         allocoutput{T<:Complex}(t::Jackknife, X::AbstractArray{T,$n}, Y::AbstractArray{T,$n}=X) =
-            JackknifeOutput(zeros(eltype(t.transform, X), size(X, 2), size(Y, 2), $([:(size(X, i)) for i = 3:n]...)),
-                            zeros(eltype(t.transform, X), size(X, 1), size(X, 2), size(Y, 2), $([:(size(X, i)) for i = 3:n]...)))
+            JackknifeOutput(zeros(eltype(t.transform, X), size(X, 2), size(Y, 2), $([:(size(X, $i)) for i = 3:n]...)),
+                            zeros(eltype(t.transform, X), size(X, 1), size(X, 2), size(Y, 2), $([:(size(X, $i)) for i = 3:n]...)))
     end
 end
 
@@ -353,18 +353,9 @@ function computestat!{S,T<:Complex}(t::Jackknife, out::JackknifeOutput, work::S,
     trueval = out.trueval
     surrogates = out.surrogates
     !isempty(X) || error(ArgumentError("X is empty"))
-    lead = size(X, 1)*size(X, 2)
-    leadtrue = size(X, 1)*size(X, 1)
-    leadsurrogates = leadtrue*size(X, 2)
-    trail = Base.trailingsize(X, 3)
-
-    sz = (size(X, 1), size(X, 2))
-    sztrueval = (size(X, 1), size(X, 1))
-    szsurrogates = (size(X, 1), size(X, 1), size(X, 2))
-    for i = 1:trail
-        computestat!(t, JackknifeOutput(pointer_to_array(pointer(trueval, leadtrue*(i-1)+1), sztrueval),
-                                        pointer_to_array(pointer(surrogates, leadsurrogates*(i-1)+1), szsurrogates)),
-                     work, pointer_to_array(pointer(X, lead*(i-1)+1), sz))
+    for i = 1:Base.trailingsize(X, 3)
+        computestat!(t, JackknifeOutput(sub(trueval, :, :, i), sub(surrogates, :, :, :, i)),
+                     work, sub(X, :, :, i))
     end
     out
 end
