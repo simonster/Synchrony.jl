@@ -31,14 +31,14 @@ function computestat!{T<:Real}(t::HurtadoModulationIndex, out::AbstractMatrix{T}
     chkinput(out, X, Y)
 
     # Bin phases
-    fill!(ninbin, uint8(0))
+    fill!(ninbin, UInt8(0))
     m = nbins/2pi
     for j = 1:size(X, 2), i = 1:size(X, 1)
         @inbounds bin = phasebin[i, j] = ceil(Uint8, (angle(X[i, j])+pi)*m)
         @inbounds ninbin[bin, j] += 1
     end
 
-    hmax = log(float64(nbins))
+    hmax = log(nbins)
     # Compute phase-amplitude coupling
     for k = 1:size(Y, 2)
         # Compute amplitudes

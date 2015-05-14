@@ -12,9 +12,9 @@ computestat!{T<:Real}(::Coherency, out::AbstractMatrix{Complex{T}}, work::Nothin
 
 # Two input matrices
 allocwork{T<:Real}(::Coherency, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
-    (Array(T, 1, nchannels(X)), Array(T, 1, nchannels(Y)))
+    (cov2coh_work(X), cov2coh_work(Y))
 function computestat!{T<:Real}(::Coherency, out::AbstractMatrix{Complex{T}},
-                      work::(Matrix{T}, Matrix{T}),
+                      work::(Array{T}, Array{T}),
                       X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
     cov2coh!(out, X, Y, work[1], work[2], Ac_mul_B!(out, X, Y))
 end
@@ -35,9 +35,9 @@ computestat!{T<:Real}(::Coherence, out::AbstractMatrix{T},
 
 # Two input matrices
 allocwork{T<:Real}(::Coherence, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
-    (Array(Complex{T}, nchannels(X), nchannels(Y)), Array(T, 1, nchannels(X)), Array(T, 1, nchannels(Y)))
+    (Array(Complex{T}, nchannels(X), nchannels(Y)), cov2coh_work(X), cov2coh_work(Y))
 computestat!{T<:Real}(::Coherence, out::AbstractMatrix{T},
-                      work::(Matrix{Complex{T}}, Matrix{T}, Matrix{T}),
+                      work::(Matrix{Complex{T}}, Array{T}, Array{T}),
                       X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) = 
     cov2coh!(out, X, Y, work[2], work[3], Ac_mul_B!(work[1], X, Y), Base.AbsFun())
 
@@ -91,13 +91,13 @@ end
 # Two input matrices
 allocwork{T<:Real}(t::Jackknife{Coherency}, X::AbstractVecOrMat{Complex{T}},
                    Y::AbstractVecOrMat{Complex{T}}) =
-    (nothing, Array(T, 1, nchannels(X)), Array(T, 1, nchannels(Y)))
+    (nothing, cov2coh_work(X), cov2coh_work(Y))
 allocwork{T<:Real}(t::Jackknife{Coherence}, X::AbstractVecOrMat{Complex{T}},
                    Y::AbstractVecOrMat{Complex{T}}) =
-    (Array(Complex{T}, nchannels(X), nchannels(Y)), Array(T, 1, nchannels(X)), Array(T, 1, nchannels(Y)))
+    (Array(Complex{T}, nchannels(X), nchannels(Y)), cov2coh_work(X), cov2coh_work(Y))
 function computestat!{T<:Real,V}(t::Union(Jackknife{Coherency}, Jackknife{Coherence}),
                                  out::JackknifeOutput,
-                                 work::(V, Matrix{T}, Matrix{T}),
+                                 work::(V, Array{T}, Array{T}),
                                  X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
     stat = t.transform
     trueval = out.trueval
@@ -153,11 +153,11 @@ function computestat!{S,T<:Real}(t::Union(Bootstrap{Coherency}, Bootstrap{Cohere
     XXc::Array{Complex{T}, 3} = isa(t, Bootstrap{Coherence}) ? work : out
 
     size(out, 1) == size(weights, 1) && size(out, 2) == nchannels(X) &&
-        size(out, 3) == nchannels(X) || error(DimensionMismatch("output size mismatch"))
+        size(out, 3) == nchannels(X) || throw(DimensionMismatch("output size mismatch"))
     size(XXc, 1) == size(out, 1) && size(XXc, 2) == size(out, 2) &&
-        size(XXc, 3) == size(out, 3) || error(DimensionMismatch("work size mimatch"))
+        size(XXc, 3) == size(out, 3) || throw(DimensionMismatch("work size mimatch"))
 
-    fill!(XXc, 0.0)
+    fill!(XXc, zero(T))
 
     # Compute cross-spectrum for each bootstrap
     @inbounds for k = 1:size(X, 2), j = 1:k, i = 1:size(X, 1)
@@ -183,10 +183,10 @@ function computestat!{S,T<:Real}(t::Union(Bootstrap{Coherency}, Bootstrap{Cohere
 end
 
 # Two input matrices
-allocwork{T<:Real}(t::Bootstrap{Coherency}, X::AbstractVecOrMat{Complex{T}}) =
+allocwork{T<:Real}(t::Bootstrap{Coherency}, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
     (nothing, Array(T, size(t.weights, 1), nchannels(X)), Array(T, size(t.weights, 1), nchannels(Y)))
-allocwork{T<:Real}(t::Bootstrap{Coherence}, X::AbstractVecOrMat{Complex{T}}) =
-    (Array(Complex{T}, size(t.weights, 1), nchannels(X), nchannels(X)),
+allocwork{T<:Real}(t::Bootstrap{Coherence}, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
+    (Array(Complex{T}, size(t.weights, 1), nchannels(X), nchannels(Y)),
      Array(T, size(t.weights, 1), nchannels(X)), Array(T, size(t.weights, 1), nchannels(Y)))
 function computestat!{S,T<:Real,V}(t::Union(Bootstrap{Coherency}, Bootstrap{Coherence}),
                                    out::AbstractArray{S,3},
@@ -198,11 +198,11 @@ function computestat!{S,T<:Real,V}(t::Union(Bootstrap{Coherency}, Bootstrap{Cohe
     psdY = work[3]
 
     size(out, 1) == size(weights, 1) && size(out, 2) == nchannels(X) &&
-        size(out, 3) == nchannels(X) || error(DimensionMismatch("output size mismatch"))
+        size(out, 3) == nchannels(X) || throw(DimensionMismatch("output size mismatch"))
     size(XYc, 1) == size(out, 1) && size(XYc, 2) == size(out, 2) &&
         size(XYc, 3) == size(out, 3) && size(psdX, 1) == size(weights, 1) &&
         size(psdX, 2) == nchannels(X) && size(psdY, 1) == size(weights, 1) &&
-        size(psdY, 2) == nchannels(Y) || error(DimensionMismatch("work size mimatch"))
+        size(psdY, 2) == nchannels(Y) || throw(DimensionMismatch("work size mimatch"))
 
     fill!(XYc, zero(Complex{T}))
     fill!(psdX, zero(T))

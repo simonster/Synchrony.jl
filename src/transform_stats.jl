@@ -1,7 +1,8 @@
 export computestat, computestat!, PowerSpectrum, CrossSpectrum, Coherency,
        Coherence, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, WPLI,
        WPLI2Debiased, JammalamadakaR, JuppMardiaR,
-       HurtadoModulationIndex, Jackknife, jackknife_bias, jackknife_var
+       HurtadoModulationIndex, Jackknife, jackknife_bias, jackknife_var, Bootstrap,
+       genweights
 
 #
 # Utilities
@@ -49,7 +50,7 @@ function cov2coh!{T<:Real}(out::Union(AbstractMatrix{Complex{T}}, AbstractMatrix
 end
 function cov2coh!{T<:Real}(out::Union(AbstractMatrix{Complex{T}}, AbstractMatrix{T}),
                            X::AbstractVecOrMat, Y::AbstractVecOrMat,
-                           Xtmp::AbstractMatrix{T}, Ytmp::AbstractMatrix{T},
+                           Xtmp::AbstractVecOrMat{T}, Ytmp::AbstractVecOrMat{T},
                            XYc::Union(AbstractMatrix{Complex{T}}, AbstractMatrix{T})=out,
                            f=Base.IdFun())
     (size(XYc, 1) == length(Xtmp) && size(XYc, 2) == length(Ytmp)) ||
@@ -71,6 +72,10 @@ function cov2coh!{T<:Real}(out::Union(AbstractMatrix{Complex{T}}, AbstractMatrix
     end
     out
 end
+
+# Work array for X or Y in two-argument form
+cov2coh_work{T}(X::AbstractVector{Complex{T}}) = Array(T, 1)
+cov2coh_work{T}(X::AbstractMatrix{Complex{T}}) = Array(T, 1, nchannels(X))
 
 # Fastest possible unsafe submatrix
 immutable UnsafeSubMatrix{T<:Number} <: DenseMatrix{T}
@@ -196,7 +201,7 @@ function normalized(t::PairwiseStatistic, work, X, Y)
 end
 
 #
-# Generic jackknife surrogate computation
+# Inefficient generic jackknife surrogate computation
 #
 
 immutable Jackknife{R<:Statistic} <: Statistic
@@ -221,8 +226,8 @@ end
 for n = 2:6
     @eval begin
         allocoutput{T<:Complex}(t::Jackknife, X::AbstractArray{T,$n}, Y::AbstractArray{T,$n}=X) =
-            JackknifeOutput(zeros(eltype(t.transform, X), size(X, 2), size(Y, 2), $([:(size(X, $i)) for i = 3:n]...)),
-                            zeros(eltype(t.transform, X), size(X, 1), size(X, 2), size(Y, 2), $([:(size(X, $i)) for i = 3:n]...)))
+            JackknifeOutput(zeros(eltype(t.transform, X, Y), size(X, 2), size(Y, 2), $([:(size(X, $i)) for i = 3:n]...)),
+                            zeros(eltype(t.transform, X, Y), size(X, 1), size(X, 2), size(Y, 2), $([:(size(X, $i)) for i = 3:n]...)))
     end
 end
 
@@ -361,14 +366,105 @@ function computestat!{S,T<:Complex}(t::Jackknife, out::JackknifeOutput, work::S,
 end
 
 #
-# Bootstrapping
+# Inefficient generic bootstrap computation
 #
 
 immutable Bootstrap{R<:Statistic} <: Statistic
     transform::R
     weights::Matrix{Int32}    # Sample weights for each bootstrap. nbootstraps x ntrials
+                              # This is transposed for efficiency when weighting output
+
+    function Bootstrap(transform, weights)
+        any(sum(weights, 2) .!= size(weights, 2)) && throw(ArgumentError("weights must sum to ntrials"))
+        new(transform, weights)
+    end
+end
+Bootstrap(transform::Statistic, weights) = Bootstrap{typeof(transform)}(transform, weights)
+
+for n = 2:6
+    @eval begin
+        allocoutput{T<:Complex}(t::Bootstrap, X::AbstractArray{T,$n}, Y::AbstractArray{T,$n}=X) =
+            zeros(eltype(t.transform, X, Y), size(t.weights, 1), size(X, 2), size(Y, 2), $([:(size(X, $i)) for i = 3:n]...))
+    end
 end
 
+#genweights(ntrials::Int, nbootstraps::Int) = rand(Multinomial(ntrials, ntrials), nbootstraps)'
+function genweights(ntrials::Int, nbootstraps::Int)
+    weights = zeros(Int32, ntrials, nbootstraps)
+    rnd = zeros(Int32, nbootstraps)
+    for iboot = 1:nbootstraps
+        @compat rand!(rnd, Int32(1):Int32(ntrials))
+        for itrial = 1:ntrials
+            @inbounds weights[rnd[itrial], iboot] += @compat Int32(1)
+        end
+    end
+    weights'
+end
+Bootstrap(transform::Statistic, ntrials::Int, nbootstraps::Int) =
+    Bootstrap(transform, genweights(ntrials, nbootstraps))
+
+function copybootstraps!(out, X, weights, ibootstrap)
+    @inbounds for ichannel = 1:nchannels(out)
+        n = 1
+        for itrial = 1:size(weights, 1)
+            fin = n + weights[itrial, ibootstrap]
+            v = X[itrial, ichannel]
+            while n < fin
+                out[n, ichannel] = v
+                n += 1
+            end
+        end
+    end
+    out
+end
+
+allocwork{T<:Real}(t::Bootstrap, X::AbstractVecOrMat{Complex{T}}) =
+    (Array(Complex{T}, size(X, 1), size(X, 2)), t.weights', allocoutput(t.transform, X), allocwork(t.transform, X))
+function computestat!{R<:Statistic,T<:Real,V}(t::Bootstrap{R}, out::AbstractArray{V,3},
+                                              work::(Matrix{Complex{T}}, Matrix{Int32}, Matrix{V}, Any),
+                                              X::AbstractVecOrMat{Complex{T}})
+    stat = t.transform
+    ntrials, nch = size(X)
+    Xbootstrap, weights, bsoutput, bswork = work
+
+    (size(X, 1) == size(Xbootstrap, 1) == size(weights, 1) &&
+     size(X, 2) == size(Xbootstrap, 2)) || throw(ArgumentError("invalid work object"))
+    chkinput(bsoutput, X)
+
+    for ibootstrap = 1:size(weights, 2)
+        copybootstraps!(Xbootstrap, X, weights, ibootstrap)
+        computestat!(stat, bsoutput, bswork, Xbootstrap)
+        out[ibootstrap, :, :] = bsoutput
+    end
+
+    out
+end
+
+allocwork{T<:Real}(t::Bootstrap, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
+    (Array(Complex{T}, size(X, 1), size(X, 2)), Array(Complex{T}, size(Y, 1), size(Y, 2)),
+     t.weights', allocoutput(t.transform, X, Y), allocwork(t.transform, X, Y))
+function computestat!{R<:Statistic,T<:Real,V}(t::Jackknife{R}, out::AbstractArray{V,3},
+                                              work::(Matrix{Complex{T}}, Matrix{Complex{T}}, Matrix{Int32}, Matrix{V}, Any),
+                                              X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
+    ntrials, nchX = size(X)
+    nchY = size(Y, 2)
+    Xbootstrap, Ybootstrap, weights, bsoutput, bswork = work
+
+    (size(X, 1) == size(Xbootstrap, 1) == size(weights, 1) == size(out, 1) &&
+     size(Y, 1) == size(Ybootstrap, 1) == size(weights, 1) == size(out, 1) &&
+     size(X, 2) == size(Xbootstrap, 2) &&
+     size(Y, 2) == size(Ybootstrap, 2)) || throw(ArgumentError("invalid work object"))
+    chkinput(bsoutput, X, Y)
+
+    for ibootstrap = 1:size(weights, 2)
+        copybootstraps!(Xbootstrap, X, weights, ibootstrap)
+        copybootstraps!(Ybootstrap, Y, weights, ibootstrap)
+        computestat!(stat, bsoutput, bswork, Xbootstrap, Ybootstrap)
+        out[ibootstrap, :, :] = bsoutput
+    end
+
+    out
+end
 
 
 #

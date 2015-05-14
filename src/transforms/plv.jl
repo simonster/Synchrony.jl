@@ -18,8 +18,8 @@ end
 
 # Single input matrix
 allocwork{T<:Real}(t::MeanPhaseDiff, X::AbstractVecOrMat{Complex{T}}) =
-    t.normalized ? MeanPhaseDiffWork{T}() : MeanPhaseDiffWork{T}(Array(Complex{T}, size(X)))
-_finish(::MeanPhaseDiff, x, n) = x/n
+    t.normalized ? MeanPhaseDiffWork{T}() : MeanPhaseDiffWork{T}(Array(Complex{T}, size(X, 1), size(X, 2)))
+finish(::MeanPhaseDiff, x, n) = x/n
 function computestat!{T<:Real}(t::MeanPhaseDiff, out::AbstractMatrix{Complex{T}},
                                work::MeanPhaseDiffWork{T}, X::AbstractVecOrMat{Complex{T}})
     scale!(Ac_mul_A!(out, normalized(t, work, X)), 1/ntrials(X))
@@ -28,10 +28,10 @@ end
 # Two input matrices
 allocwork{T<:Real}(t::MeanPhaseDiff, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
     t.normalized ? MeanPhaseDiffWork{T}() :
-        MeanPhaseDiffWork{T}(Array(Complex{T}, size(X)), Array(Complex{T}, size(Y)))
-_finish_xy!(::MeanPhaseDiff, out, work, n) = scale!(out, work, 1/n)
+        MeanPhaseDiffWork{T}(Array(Complex{T}, size(X, 1), size(X, 2)), Array(Complex{T}, size(Y, 1), size(Y, 2)))
+finish_xy!(::MeanPhaseDiff, out, work, n) = scale!(out, work, 1/n)
 function computestat!{T<:Real}(t::MeanPhaseDiff, out::AbstractMatrix{Complex{T}},
-                               work::MeanPhaseDiffWork{T}, X::AbstractVecOrMat{Complex{T}})
+                               work::MeanPhaseDiffWork{T}, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
     X, Y = normalized(t, work, X, Y)
     scale!(Ac_mul_B!(out, X, Y), 1/ntrials(X))
 end
@@ -59,8 +59,8 @@ immutable PPC <: RealPairwiseStatistic
 end
 PPC() = PPC(false)
 
-immutable PLVWork{T<:Real}
-    meanphasediff::Matrix{Complex{T}}
+immutable PLVWork{T<:Real,S}
+    meanphasediff::S
     normalizedX::Matrix{Complex{T}}
     normalizedY::Matrix{Complex{T}}
 
@@ -80,35 +80,43 @@ finish(::Type{PPC}, x::Complex, n::Int) = abs2(x)/(n*(n-1)) - 1/(n-1)
 
 
 # Single input matrix
-allocwork{T<:Real}(t::Union(PLV, PPC), X::AbstractVecOrMat{Complex{T}}) =
-    t.normalized ? PLVWork{T}(Array(Complex{T}, nchannels(X), nchannels(X))) :
-        PLVWork{T}(Array(Complex{T}, nchannels(X), nchannels(X)),
-                   Array(Complex{T}, size(X, 1), size(X, 2)))
+function allocwork{T<:Real}(t::Union(PLV, PPC), X::AbstractVecOrMat{Complex{T}})
+    if t.normalized
+        PLVWork{T,Matrix{Complex{T}}}(Array(Complex{T}, nchannels(X), nchannels(X)))
+    else
+        PLVWork{T,Matrix{Complex{T}}}(Array(Complex{T}, nchannels(X), nchannels(X)),
+                                      Array(Complex{T}, size(X, 1), size(X, 2)))
+    end
+end
 function finish!{T<:PairwiseStatistic}(::Type{T}, out, work, n)
     for j = 1:size(out, 1), i = 1:j
         @inbounds out[i, j] = finish(T, work[i, j], n)
     end
     out
 end
-function computestat!{T<:Real}(t::Union(PLV, PPC), out::AbstractMatrix{T}, work::PLVWork{T},
+function computestat!{T<:Real}(t::Union(PLV, PPC), out::AbstractMatrix{T}, work::PLVWork{T,Matrix{Complex{T}}},
                                X::AbstractVecOrMat{Complex{T}})
     chkinput(out, X)
     finish!(typeof(t), out, Ac_mul_A!(work.meanphasediff, normalized(t, work, X)), ntrials(X))
 end
 
 # Two input matrices
-allocwork{T<:Real}(t::Union(PLV, PPC), X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
-    t.normalized ? PLVWork{T}(Array(Complex{T}, nchannels(X), nchannels(Y))) :
-        PLVWork{T}(Array(Complex{T}, nchannels(X), nchannels(Y)),
-                   Array(Complex{T}, size(X, 1), size(X, 2)),
-                   Array(Complex{T}, size(Y, 1), size(Y, 2)))
+function allocwork{T<:Real}(t::Union(PLV, PPC), X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
+    if t.normalized
+        PLVWork{T,Matrix{Complex{T}}}(Array(Complex{T}, nchannels(X), nchannels(Y)))
+    else
+        PLVWork{T,Matrix{Complex{T}}}(Array(Complex{T}, nchannels(X), nchannels(Y)),
+                                      Array(Complex{T}, size(X, 1), size(X, 2)),
+                                      Array(Complex{T}, size(Y, 1), size(Y, 2)))
+    end
+end
 function finish_xy!{T<:PairwiseStatistic}(::Type{T}, out, work, n)
     for i = 1:length(out)
         @inbounds out[i] = finish(T, work[i], n)
     end
     out
 end
-function computestat!{T<:Real}(t::Union(PLV, PPC), out::AbstractMatrix{T}, work::PLVWork{T},
+function computestat!{T<:Real}(t::Union(PLV, PPC), out::AbstractMatrix{T}, work::PLVWork{T,Matrix{Complex{T}}},
                                X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
     chkinput(out, X, Y)
     X, Y = normalized(t, work, X, Y)
@@ -120,11 +128,11 @@ end
 #
 
 # Single input matrix
-allocwork{T<:Real}(t::Union(Jackknife{MeanPhaseDiff}, Jackknife{PLV}, Jackknife{PPC}),
-                   X::AbstractVecOrMat{Complex{T}}) = allocwork(PLV(), X)
+allocwork{T<:Real}(t::Union(Jackknife{MeanPhaseDiff}, Jackknife{PPC}, Jackknife{PLV}), X::AbstractVecOrMat{Complex{T}}) =
+    allocwork(PLV(t.transform.normalized), X)
 function computestat!{S<:Union(MeanPhaseDiff, PLV, PPC), T<:Real}(t::Jackknife{S},
                                                                   out::JackknifeOutput,
-                                                                  work::PLVWork{T},
+                                                                  work::Union(MeanPhaseDiffWork{T}, PLVWork{T,Matrix{Complex{T}}}),
                                                                   X::AbstractVecOrMat{Complex{T}})
     X = normalized(t.transform, work, X)
     trueval = out.trueval
@@ -154,12 +162,11 @@ function computestat!{S<:Union(MeanPhaseDiff, PLV, PPC), T<:Real}(t::Jackknife{S
 end
 
 # Two input matrices
-allocwork{T<:Real}(t::Union(Jackknife{MeanPhaseDiff}, Jackknife{PLV}, Jackknife{PPC}),
-                   X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
-    allocwork(PLV(), X, Y)
+allocwork{T<:Real}(t::Union(Jackknife{MeanPhaseDiff}, Jackknife{PPC}, Jackknife{PLV}), X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
+    allocwork(PLV(t.transform.normalized), X, Y)
 function computestat!{S<:Union(MeanPhaseDiff, PLV, PPC), T<:Real}(t::Jackknife{S},
                                                                   out::JackknifeOutput,
-                                                                  work::PLVWork{T},
+                                                                  work::Union(MeanPhaseDiffWork{T}, PLVWork{T,Matrix{Complex{T}}}),
                                                                   X::AbstractVecOrMat{Complex{T}},
                                                                   Y::AbstractVecOrMat{Complex{T}})
     X, Y = normalized(t.transform, work, X, Y)
@@ -181,5 +188,97 @@ function computestat!{S<:Union(MeanPhaseDiff, PLV, PPC), T<:Real}(t::Jackknife{S
         end
     end
 
+    out
+end
+
+#
+# Bootstrapping for PLV/PPC
+#
+
+# Single input matrix
+allocwork{T<:Real}(t::Bootstrap{MeanPhaseDiff}, X::AbstractVecOrMat{Complex{T}}) = allocwork(t.transform, X)
+function allocwork{T<:Real}(t::Union(Bootstrap{PLV}, Bootstrap{PPC}), X::AbstractVecOrMat{Complex{T}})
+    if t.transform.normalized
+        PLVWork{T,Array{Complex{T},3}}(Array(Complex{T}, size(t.weights, 1), nchannels(X), nchannels(X)))
+    else
+        PLVWork{T,Array{Complex{T},3}}(Array(Complex{T}, size(t.weights, 1), nchannels(X), nchannels(X)),
+                                       Array(Complex{T}, size(X, 1), size(X, 2)))
+    end
+end
+function computestat!{S<:Union(MeanPhaseDiff,PLV,PPC),U,T<:Real}(t::Bootstrap{S}, out::AbstractArray{U,3},
+                                                                 work::Union(MeanPhaseDiffWork{T}, PLVWork{T,Array{Complex{T},3}}),
+                                                                 X::AbstractVecOrMat{Complex{T}})
+    weights = t.weights
+    X = normalized(t.transform, work, X)
+    XXc::Array{Complex{T}, 3} = isa(t, Bootstrap{MeanPhaseDiff}) ? out : work.meanphasediff
+
+    size(out, 1) == size(weights, 1) && size(out, 2) == nchannels(X) &&
+        size(out, 3) == nchannels(X) || error(DimensionMismatch("output size mismatch"))
+    size(XXc, 1) == size(out, 1) && size(XXc, 2) == size(out, 2) &&
+        size(XXc, 3) == size(out, 3) || error(DimensionMismatch("work size mimatch"))
+
+    fill!(XXc, zero(T))
+
+    # Compute sum of phase differences for each bootstrap
+    @inbounds for k = 1:size(X, 2), j = 1:k-1, i = 1:size(X, 1)
+        v1 = X[i, j]
+        v2 = X[i, k]
+        @simd for iboot = 1:size(weights, 1)
+            XXc[iboot, j, k] = accumulate(S, XXc[iboot, j, k], v1, v2, weights[iboot, i])
+        end
+    end
+
+    # Finish
+    @inbounds for k = 1:size(X, 2)
+        for j = 1:k-1, i = 1:size(XXc, 1)
+            out[i, j, k] = finish(S, XXc[i, j, k], ntrials(X))
+        end
+        for i = 1:size(XXc, 1)
+            out[i, k, k] = 1
+        end
+    end
+    out
+end
+
+# Two input matrices
+allocwork{T<:Real}(t::Bootstrap{MeanPhaseDiff}, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
+    allocwork(t.transform, X, Y)
+function allocwork{T<:Real}(t::Union(Bootstrap{PLV}, Bootstrap{PPC}), X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
+    if t.transform.normalized
+        PLVWork{T,Array{Complex{T},3}}(Array(Complex{T}, size(t.weights, 1), nchannels(X), nchannels(Y)))
+    else
+        PLVWork{T,Array{Complex{T},3}}(Array(Complex{T}, size(t.weights, 1), nchannels(X), nchannels(Y)),
+                                       Array(Complex{T}, size(X, 1), size(X, 2)),
+                                       Array(Complex{T}, size(Y, 1), size(Y, 2)))
+    end
+end
+function computestat!{S<:Union(MeanPhaseDiff,PLV,PPC),U,T<:Real}(t::Bootstrap{S}, out::AbstractArray{U,3},
+                                                                 work::Union(MeanPhaseDiffWork{T}, PLVWork{T,Array{Complex{T},3}}),
+                                                                 X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
+    weights = t.weights
+    XYc::Array{Complex{T}, 3} = isa(t, Bootstrap{MeanPhaseDiff}) ? out : work.meanphasediff
+
+    size(out, 1) == size(weights, 1) && size(out, 2) == nchannels(X) &&
+        size(out, 3) == nchannels(X) || error(DimensionMismatch("output size mismatch"))
+    size(XYc, 1) == size(out, 1) && size(XYc, 2) == size(out, 2) &&
+        size(XYc, 3) == size(out, 3) || error(DimensionMismatch("work size mimatch"))
+
+    fill!(XYc, zero(Complex{T}))
+    fill!(psdX, zero(T))
+    fill!(psdY, zero(T))
+
+    # Compute sum of phase differences for each bootstrap
+    @inbounds for k = 1:size(Y, 2), j = 1:size(X, 2), i = 1:size(X, 1)
+        v1 = X[i, j]
+        v2 = Y[i, k]
+        @simd for iboot = 1:size(weights, 1)
+            XYc[iboot, j, k] = accumulate(S, XYc[iboot, j, k], v1, v2, weights[iboot, i])
+        end
+    end
+
+    # Finish
+    for i = 1:length(out)
+        @inbounds out[i] = finish(S, XXc[i, j, k], ntrials(X))
+    end
     out
 end

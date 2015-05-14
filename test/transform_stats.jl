@@ -1,4 +1,4 @@
-using Synchrony2, Base.Test, CrossDecomposition
+using Synchrony2, Base.Test, CrossDecomposition, Compat
 
 # Tests for statistics determined by cross spectrum
 angles = [
@@ -39,7 +39,7 @@ r = [
 expangles = exp(im*angles)
 expcoef = r.*expangles
 true_coh = mean(expcoef)./sqrt(mean(abs2(r)))
-true_plv = abs(mean(expangles))
+true_meanphasediff = mean(expangles)
 true_ppc = 1-var(expangles)
 true_pli = mean(sign(angles))
 true_pli2unbiased = (length(angles)*abs2(mean(sign(angles)))-1)/(length(angles)-1)
@@ -57,7 +57,8 @@ csinput = [oneinput expcoef]
 # Single input
 for (stat, output) in ((Coherency(), true_coh),
                        (Coherence(), abs(true_coh)),
-                       (PLV(), true_plv),
+                       (MeanPhaseDiff(), true_meanphasediff),
+                       (PLV(), abs(true_meanphasediff)),
                        (PPC(), true_ppc),
                        (PLI(), true_pli),
                        (PLI2Unbiased(), true_pli2unbiased),
@@ -125,19 +126,28 @@ function dumbcfc(x, y, nbins)
     hmax = log(nbins)
     (hmax - h)/hmax
 end
-s1 = exp(im*2pi*[0.05:.1:10]).*repmat([0.05:.1:1], 10)
-s2 = exp(im*2pi*[1/18:1/9:11+1/18]).*repmat([0.99, ones(9)*0.01], 10)
+s1 = exp(im*2pi*[0.05:.1:10;]).*repmat([0.05:.1:1;], 10)
+s2 = exp(im*2pi*[1/18:1/9:11+1/18;]).*repmat([0.99; ones(9)*0.01], 10)
 
 out = computestat(HurtadoModulationIndex(10), s1, s2)
 @test_approx_eq out[1] dumbcfc(s1, s2, 10)
 
-# Test jackknife
 csinput = [csinput expi]
-for stat in (Coherence, Coherency, PLV, PPC, JammalamadakaR, JuppMardiaR)
+
+# Generate bootstrap weights
+bsweights = zeros(Int32, size(csinput, 1), 10)
+bsindices = rand(1:size(csinput, 1), size(bsweights))
+for iboot = 1:size(bsindices, 2), itrial = 1:size(bsindices, 1)
+    @inbounds bsweights[bsindices[itrial, iboot], iboot] += @compat Int32(1)
+end
+bsweights = bsweights'
+
+for stat in (Coherence, Coherency, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, WPLI, WPLI2Debiased, JammalamadakaR, JuppMardiaR)
+    # Test jackknife
     trueval = computestat(stat(), csinput)
     estimates = zeros(eltype(trueval), size(csinput, 1), size(csinput, 2), size(csinput, 2))
     for i = 1:size(csinput, 1)
-        estimates[i, :, :] = computestat(stat(), csinput[[1:i-1, i+1:size(csinput, 1)], :])
+        estimates[i, :, :] = computestat(stat(), csinput[[1:i-1; i+1:size(csinput, 1)], :])
     end
     jn = computestat(Jackknife(stat()), csinput)
     @test_approx_eq jn.trueval trueval
@@ -163,6 +173,14 @@ for stat in (Coherence, Coherency, PLV, PPC, JammalamadakaR, JuppMardiaR)
     @test_approx_eq jn.trueval trueval
     @test_approx_eq_eps jackknife_bias(jn) (size(csinput, 1)-1)*(squeeze(mean(estimates, 1), 1) - trueval) sqrt(eps())
     @test_approx_eq jackknife_var(jn) squeeze(sum(abs2(estimates .- mean(estimates, 1)), 1), 1)*(size(csinput, 1)-1)/size(csinput, 1)
+
+    # Test bootstrap
+    estimates = zeros(eltype(trueval), size(bsweights, 1), size(csinput, 2), size(csinput, 2))
+    for i = 1:size(bsweights, 1)
+        estimates[i, :, :] = computestat(stat(), csinput[bsindices[:, i], :])
+    end
+    bs = computestat(Bootstrap(stat(), bsweights), csinput)
+    @test_approx_eq bs estimates
 end
 
 # Test shift predictor
