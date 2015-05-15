@@ -42,13 +42,13 @@ function allocwork{T<:Real}(t::JammalamadakaR, X::AbstractVecOrMat{Complex{T}})
                                Array(Complex{T}, size(X, 1), size(X, 2)))
     end
 end
-function computestat!{T<:Real}(t::JammalamadakaR, out::AbstractMatrix{T},
-                               work::JammalamadakaRWorkX{T},
-                               X::AbstractVecOrMat{Complex{T}})
+@normalized function computestat!{T<:Real}(t::JammalamadakaR, out::AbstractMatrix{T},
+                                           work::JammalamadakaRWorkX{T},
+                                           X::AbstractVecOrMat{Complex{T}})
     chkinput(out, X)
 
     # Sins minus mean phases
-    workX = sinmeanphasediff!(work.workX, normalized(t, work, X))
+    workX = sinmeanphasediff!(work.workX, X)
 
     # Products of phase differences
     At_mul_A!(out, workX)
@@ -81,11 +81,10 @@ function allocwork{T<:Real}(t::JammalamadakaR, X::AbstractVecOrMat{Complex{T}}, 
                                 Array(Complex{T}, size(Y, 1), size(Y, 2)))
     end
 end
-function computestat!{T<:Real}(t::JammalamadakaR, out::AbstractMatrix{T},
-                               work::JammalamadakaRWorkXY{T},
-                               X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
+@normalized function computestat!{T<:Real}(t::JammalamadakaR, out::AbstractMatrix{T},
+                                           work::JammalamadakaRWorkXY{T},
+                                           X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
     chkinput(out, X, Y)
-    X, Y = normalized(t, work, X, Y)
 
     # Sins minus mean phases
     workX = sinmeanphasediff!(work.workX, X)

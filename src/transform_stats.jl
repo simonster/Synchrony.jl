@@ -141,10 +141,10 @@ allocwork{T<:Real}(t::Statistic, X::AbstractVecOrMat{Complex{T}}) =
     error("allocwork($(typeof(t)), X) not defined")
 allocwork{T<:Real}(t::Statistic, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
     error("allocwork($(typeof(t)), X, Y) not defined")
-allocwork{T<:Real}(t::Statistic, X::AbstractArray{Complex{T}}) = allocwork(t, UnsafeSubMatrix(pointer(X), size(X, 2), size(X, 2)))
+allocwork{T<:Real}(t::Statistic, X::AbstractArray{Complex{T}}) = allocwork(t, UnsafeSubMatrix(pointer(X), size(X, 1), size(X, 2)))
 function allocwork(t::Statistic, X::AbstractArray, Y::AbstractArray)
-    allocwork(t, UnsafeSubMatrix(pointer(X), size(X, 2), size(X, 2)),
-                 UnsafeSubMatrix(pointer(Y), size(Y, 2), size(Y, 2)))
+    allocwork(t, UnsafeSubMatrix(pointer(X), size(X, 1), size(X, 2)),
+                 UnsafeSubMatrix(pointer(Y), size(Y, 1), size(Y, 2)))
 end
 
 for n = 3:6
@@ -188,17 +188,43 @@ function computestat!{T<:Complex}(t::Statistic, out::AbstractArray, work, X::Abs
     out
 end
 
-# If t.normalized is false, compute work.normalizedX (and maybe
-# work.normalizedY) in place and return it. Otherwise return X.
-normalized(t::PairwiseStatistic, work, X) =
-    !t.normalized ? unitnormalize!(work.normalizedX, X) : X
-function normalized(t::PairwiseStatistic, work, X, Y)
-    if !t.normalized
-        return (unitnormalize!(work.normalizedX, X), unitnormalize!(work.normalizedY, Y))
+# Macro to normalize variables on entry
+macro normalized(args...)
+    if length(args) == 1
+        fn = args[1]
+        transform = :t
+    elseif length(args) == 2
+        transform, fn = args
     else
-        return (X, Y)
+        throw(ArgumentError("@normalized: unexpected syntax"))
     end
+
+    fndef = fn.args[1].args[1]
+    if isa(fndef, Expr)
+        fndef.head != :curly && throw(ArgumentError("@normalized: unexpected syntax"))
+        fnname = fndef.args[1]
+        normalizedname = symbol("normalized_$(fnname)")
+        normalizedsig = Expr(:curly, normalizedname, fndef.args[2:end]...)
+    else
+        fnname = fndef
+        normalizedname = symbol("normalized_$(fnname)")
+        normalizedsig = normalizedname
+    end
+    fnargs = [isa(x, Symbol) ? x : x.args[1] for x in fn.args[1].args[2:end]]
+    fnsig = fn.args[1]
+    fn.args[1] = Expr(:call, normalizedsig, fn.args[1].args[2:end]...)
+    esc(Expr(:block,
+        Expr(:function, fnsig, quote
+            if $(transform).normalized
+                $(normalizedname)($(fnargs...),)
+            else
+                $(normalizedname)($([x == :X || x == :Y ? :(unitnormalize!(work.$(symbol("normalized$(x)")), $x)) : x for x in fnargs]...),)
+            end
+        end),
+        fn
+    ))
 end
+
 
 #
 # Inefficient generic jackknife surrogate computation

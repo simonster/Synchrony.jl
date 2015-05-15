@@ -52,11 +52,10 @@ function allocwork{T<:Real}(t::JuppMardiaR, X::AbstractVecOrMat{Complex{T}})
                             Array(Complex{T}, size(X, 1), size(X, 2)))
     end
 end
-function computestat!{T<:Real}(t::JuppMardiaR, out::AbstractMatrix{T},
-                               work::JuppMardiaRWorkX{T},
-                               X::AbstractVecOrMat{Complex{T}})
+@normalized function computestat!{T<:Real}(t::JuppMardiaR, out::AbstractMatrix{T},
+                                           work::JuppMardiaRWorkX{T},
+                                           X::AbstractVecOrMat{Complex{T}})
     chkinput(out, X)
-    X = normalized(t, work, X)
 
     # Compute mean phases
     workX = meandiff!(work.workX, X)
@@ -121,11 +120,10 @@ function reimcor!(workX, invsqrtsumX, n)
     end
     workX
 end
-function computestat!{T<:Real}(t::JuppMardiaR, out::AbstractMatrix{T},
-                               work::JuppMardiaRWorkXY{T},
-                               X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
+@normalized function computestat!{T<:Real}(t::JuppMardiaR, out::AbstractMatrix{T},
+                                           work::JuppMardiaRWorkXY{T},
+                                           X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
     chkinput(out, X, Y)
-    X, Y = normalized(t, work, X, Y)
 
     # Compute mean phases
     workX = meandiff!(work.workX, X)
