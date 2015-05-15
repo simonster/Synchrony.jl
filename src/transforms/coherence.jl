@@ -14,7 +14,7 @@ computestat!{T<:Real}(::Coherency, out::AbstractMatrix{Complex{T}}, work::Nothin
 allocwork{T<:Real}(::Coherency, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
     (cov2coh_work(X), cov2coh_work(Y))
 function computestat!{T<:Real}(::Coherency, out::AbstractMatrix{Complex{T}},
-                      work::(Array{T}, Array{T}),
+                      work::@compat(Tuple{Array{T}, Array{T}}),
                       X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
     cov2coh!(out, X, Y, work[1], work[2], Ac_mul_B!(out, X, Y))
 end
@@ -37,7 +37,7 @@ computestat!{T<:Real}(::Coherence, out::AbstractMatrix{T},
 allocwork{T<:Real}(::Coherence, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
     (Array(Complex{T}, nchannels(X), nchannels(Y)), cov2coh_work(X), cov2coh_work(Y))
 computestat!{T<:Real}(::Coherence, out::AbstractMatrix{T},
-                      work::(Matrix{Complex{T}}, Array{T}, Array{T}),
+                      work::@compat(Tuple{Matrix{Complex{T}}, Array{T}, Array{T}}),
                       X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) = 
     cov2coh!(out, X, Y, work[2], work[3], Ac_mul_B!(work[1], X, Y), Base.AbsFun())
 
@@ -97,7 +97,7 @@ allocwork{T<:Real}(t::Jackknife{Coherence}, X::AbstractVecOrMat{Complex{T}},
     (Array(Complex{T}, nchannels(X), nchannels(Y)), cov2coh_work(X), cov2coh_work(Y))
 function computestat!{T<:Real,V}(t::Union(Jackknife{Coherency}, Jackknife{Coherence}),
                                  out::JackknifeOutput,
-                                 work::(V, Array{T}, Array{T}),
+                                 work::@compat(Tuple{V, Array{T}, Array{T}}),
                                  X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
     stat = t.transform
     trueval = out.trueval
@@ -190,7 +190,7 @@ allocwork{T<:Real}(t::Bootstrap{Coherence}, X::AbstractVecOrMat{Complex{T}}, Y::
      Array(T, size(t.weights, 1), nchannels(X)), Array(T, size(t.weights, 1), nchannels(Y)))
 function computestat!{S,T<:Real,V}(t::Union(Bootstrap{Coherency}, Bootstrap{Coherence}),
                                    out::AbstractArray{S,3},
-                                   work::(V, Vector{T}, Vector{T}),
+                                   work::@compat(Tuple{V, Vector{T}, Vector{T}}),
                                    X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
     weights = t.weights
     XYc::Array{Complex{T}, 3} = isa(t, Bootstrap{Coherence}) ? work[1] : out

@@ -21,7 +21,7 @@ allocwork{T<:Real}(t::HurtadoModulationIndex, X::AbstractVecOrMat{Complex{T}}, Y
     (Array(Uint8, size(X, 1), size(X, 2)), Array(Int, t.nbins, nchannels(X)),
      Array(T, size(Y, 1), size(Y, 2)), Array(Float64, t.nbins))
 function computestat!{T<:Real}(t::HurtadoModulationIndex, out::AbstractMatrix{T},
-                               work::(Matrix{Uint8}, Matrix{Int}, Matrix{T}, Vector{Float64}),
+                               work::@compat(Tuple{Matrix{Uint8}, Matrix{Int}, Matrix{T}, Vector{Float64}}),
                                X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
     nbins = t.nbins
     phasebin = work[1]

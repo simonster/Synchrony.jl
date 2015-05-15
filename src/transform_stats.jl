@@ -236,7 +236,7 @@ function allocwork{T<:Real}(t::Jackknife, X::AbstractVecOrMat{Complex{T}})
     (Xsurrogate, allocoutput(t.transform, Xsurrogate), allocwork(t.transform, X), allocwork(t.transform, Xsurrogate))
 end
 function computestat!{R<:Statistic,T<:Real,V}(t::Jackknife{R}, out::JackknifeOutput,
-                                              work::(Matrix{Complex{T}}, Any, V, V),
+                                              work::@compat(Tuple{Matrix{Complex{T}}, Any, V, V}),
                                               X::AbstractVecOrMat{Complex{T}})
     stat = t.transform
     ntrials, nch = size(X)
@@ -274,7 +274,7 @@ function allocwork{T<:Real}(t::Jackknife, X::AbstractVecOrMat{Complex{T}}, Y::Ab
      allocwork(t.transform, X, Y), allocwork(t.transform, Xsurrogate, Ysurrogate))
 end
 function computestat!{R<:Statistic,T<:Real,V}(t::Jackknife{R}, out::JackknifeOutput,
-                                              work::(Matrix{Complex{T}}, Matrix{Complex{T}}, Any, V, V),
+                                              work::@compat(Tuple{Matrix{Complex{T}}, Matrix{Complex{T}}, Any, V, V}),
                                               X::AbstractVecOrMat{Complex{T}},
                                               Y::AbstractVecOrMat{Complex{T}})
     ntrials, nchX = size(X)
@@ -391,7 +391,7 @@ end
 #genweights(ntrials::Int, nbootstraps::Int) = rand(Multinomial(ntrials, ntrials), nbootstraps)'
 function genweights(ntrials::Int, nbootstraps::Int)
     weights = zeros(Int32, ntrials, nbootstraps)
-    rnd = zeros(Int32, nbootstraps)
+    rnd = zeros(Int32, ntrials)
     for iboot = 1:nbootstraps
         @compat rand!(rnd, Int32(1):Int32(ntrials))
         for itrial = 1:ntrials
@@ -421,7 +421,7 @@ end
 allocwork{T<:Real}(t::Bootstrap, X::AbstractVecOrMat{Complex{T}}) =
     (Array(Complex{T}, size(X, 1), size(X, 2)), t.weights', allocoutput(t.transform, X), allocwork(t.transform, X))
 function computestat!{R<:Statistic,T<:Real,V}(t::Bootstrap{R}, out::AbstractArray{V,3},
-                                              work::(Matrix{Complex{T}}, Matrix{Int32}, Matrix{V}, Any),
+                                              work::@compat(Tuple{Matrix{Complex{T}}, Matrix{Int32}, Matrix{V}, Any}),
                                               X::AbstractVecOrMat{Complex{T}})
     stat = t.transform
     ntrials, nch = size(X)
@@ -444,7 +444,7 @@ allocwork{T<:Real}(t::Bootstrap, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVec
     (Array(Complex{T}, size(X, 1), size(X, 2)), Array(Complex{T}, size(Y, 1), size(Y, 2)),
      t.weights', allocoutput(t.transform, X, Y), allocwork(t.transform, X, Y))
 function computestat!{R<:Statistic,T<:Real,V}(t::Jackknife{R}, out::AbstractArray{V,3},
-                                              work::(Matrix{Complex{T}}, Matrix{Complex{T}}, Matrix{Int32}, Matrix{V}, Any),
+                                              work::@compat(Tuple{Matrix{Complex{T}}, Matrix{Complex{T}}, Matrix{Int32}, Matrix{V}, Any}),
                                               X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
     ntrials, nchX = size(X)
     nchY = size(Y, 2)
@@ -466,6 +466,23 @@ function computestat!{R<:Statistic,T<:Real,V}(t::Jackknife{R}, out::AbstractArra
     out
 end
 
+# Bootstrap of n-d arrays
+computestat!{T<:Real}(t::Bootstrap, out::AbstractArray, work, X::AbstractVecOrMat{Complex{T}}) = throw(ArgumentError("invalid work or output type"))
+function computestat!{T<:Real}(t::Bootstrap, out::AbstractArray, work, X::AbstractArray{Complex{T}})
+    !isempty(X) || error(ArgumentError("X is empty"))
+    for i = 1:Base.trailingsize(X, 3)
+        computestat!(t, sub(out, :, :, :, i), work, sub(X, :, :, i))
+    end
+    out
+end
+computestat!{T<:Real}(t::Bootstrap, out::AbstractArray, work, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) = throw(ArgumentError("invalid work or output type"))
+function computestat!{T<:Real}(t::Bootstrap, out::AbstractArray, work, X::AbstractArray{Complex{T}}, Y::AbstractArray{Complex{T}})
+    !isempty(X) || error(ArgumentError("X is empty"))
+    for i = 1:Base.trailingsize(X, 3)
+        computestat!(t, sub(out, :, :, :, i), work, sub(X, :, :, i), sub(Y, :, :, i))
+    end
+    out
+end
 
 #
 # Transforms
