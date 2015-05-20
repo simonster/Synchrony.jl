@@ -143,16 +143,29 @@ end
 bsweights = bsweights'
 
 for stat in (Coherence, Coherency, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, WPLI, WPLI2Debiased, JammalamadakaR, JuppMardiaR)
-    # Test jackknife
+    # Test JackknifeSurrogates
     trueval = computestat(stat(), csinput)
     estimates = zeros(eltype(trueval), size(csinput, 1), size(csinput, 2), size(csinput, 2))
     for i = 1:size(csinput, 1)
         estimates[i, :, :] = computestat(stat(), csinput[[1:i-1; i+1:size(csinput, 1)], :])
     end
-    jn = computestat(Jackknife(stat()), csinput)
+    jnvar = squeeze(var(estimates, 1, corrected=false), 1)*(size(csinput, 1)-1)
+    jn = computestat(JackknifeSurrogates(stat()), csinput)
     @test_approx_eq jn.trueval trueval
     @test_approx_eq_eps jackknife_bias(jn) (size(csinput, 1)-1)*(squeeze(mean(estimates, 1), 1) - trueval) sqrt(eps())
-    @test_approx_eq jackknife_var(jn) squeeze(sum(abs2(estimates .- mean(estimates, 1)), 1), 1)*(size(csinput, 1)-1)/size(csinput, 1)
+    @test_approx_eq jackknife_var(jn) jnvar
+
+    # Test Jackknife
+    a = Jackknife(stat())
+    jn = computestat(Jackknife(stat()), csinput)
+    @test_approx_eq jn.trueval trueval
+    @test_approx_eq jn.var jnvar
+
+    # Test GroupJackknife
+    jn = computestat(GroupJackknife(stat(), size(csinput, 2), Vector{@compat(Tuple{Int,Int})}[[(1, 2)], [(3, 2)], [(1, 2), (2, 3)]]), csinput)
+    @test_approx_eq jn.trueval [trueval[1, 2], trueval[2, 3], (trueval[1, 2] + trueval[2, 3])/2]
+    est2 = mean([estimates[:, 1, 2] estimates[:, 2, 3]], 2)
+    @test_approx_eq jn.var [jnvar[1, 2], jnvar[2, 3], var(est2, corrected=false)*(size(csinput, 1)-1)]
 
     if stat == JammalamadakaR || stat == JuppMardiaR
         # The first channel is constant, which leads to a correlation
@@ -169,7 +182,7 @@ for stat in (Coherence, Coherency, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, W
         end
         trueval[j, k] = conj(trueval[k, j])
     end
-    jn = computestat(Jackknife(stat()), csinput, csinput)
+    jn = computestat(JackknifeSurrogates(stat()), csinput, csinput)
     @test_approx_eq jn.trueval trueval
     @test_approx_eq_eps jackknife_bias(jn) (size(csinput, 1)-1)*(squeeze(mean(estimates, 1), 1) - trueval) sqrt(eps())
     @test_approx_eq jackknife_var(jn) squeeze(sum(abs2(estimates .- mean(estimates, 1)), 1), 1)*(size(csinput, 1)-1)/size(csinput, 1)
@@ -181,6 +194,55 @@ for stat in (Coherence, Coherency, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, W
     end
     bs = computestat(Bootstrap(stat(), bsweights), csinput)
     @test_approx_eq bs estimates
+end
+
+# Test nd
+offsets = reshape(rand(10)*2pi, 1, 10)
+snr = 5*reshape(rand(10), 1, 10)
+inputs = rand(100, 10, 2, 2).*exp(im*(offsets .+ randn(100, 10, 2, 2)./snr))
+
+ngroups = 10
+groups = Array(Vector{(Int, Int)}, ngroups)
+for igroup = 1:ngroups
+    pairs = Array((Int, Int), rand(1:10))
+    for ipair = 1:length(pairs)
+        ch1 = rand(1:size(inputs, 2))
+        ch2 = rand(1:size(inputs, 2)-1)
+        ch2 >= ch1 && (ch2 += 1)
+        pairs[ipair] = (ch1, ch2)
+    end
+    groups[igroup] = pairs
+end
+
+nbootstraps = 10
+
+for stat in (Coherence, Coherency, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, WPLI, WPLI2Debiased, JammalamadakaR, JuppMardiaR)
+    # True statistic
+    tv = mapslices(x->computestat(stat(), x), inputs, (1, 2))
+    @test_approx_eq computestat(stat(), inputs) tv 
+
+    # JackknifeSurrogates
+    jns = computestat(JackknifeSurrogates(stat()), inputs)
+    @test_approx_eq jns.trueval tv
+    @test_approx_eq jackknife_var(jns) mapslices(x->jackknife_var(computestat(JackknifeSurrogates(stat()), x)), inputs, (1, 2))
+
+    # Jackknife
+    jn = computestat(Jackknife(stat()), inputs)
+    @test_approx_eq jn.trueval tv
+    @test_approx_eq jn.var mapslices(x->computestat(Jackknife(stat()), x).var, inputs, (1, 2))
+
+    # GroupJackknife
+    jn = computestat(GroupJackknife(stat(), size(inputs, 2), groups), inputs)
+    @test_approx_eq jn.trueval mapslices(x->computestat(GroupJackknife(stat(), size(inputs, 2), groups), x).trueval, inputs, (1, 2))
+    @test_approx_eq jn.var mapslices(x->computestat(GroupJackknife(stat(), size(inputs, 2), groups), x).var, inputs, (1, 2))
+
+    # Bootstrap
+    bs = Bootstrap(stat(), size(inputs, 1), nbootstraps)
+    bstrue = zeros(eltype(tv), nbootstraps, size(inputs, 2), size(inputs, 2), size(inputs)[3:end]...)
+    for i = 1:Base.trailingsize(inputs, 3)
+        bstrue[:, :, :, i] = computestat(bs, inputs[:, :, i])
+    end
+    @test_approx_eq computestat(bs, inputs) bstrue
 end
 
 # Test shift predictor
@@ -199,8 +261,8 @@ end
 
 # # Test jackknifed shift predictor
 # for stat in (Coherence, PLV), lag = 1:5
-#     t = multitaper([signal signal[:, :, circshift([1:size(signal, 3)], lag)]], Jackknife(stat()))
-#     sp = multitaper([signal signal], Jackknife(ShiftPredictor(stat(), lag)))
+#     t = multitaper([signal signal[:, :, circshift([1:size(signal, 3)], lag)]], JackknifeSurrogates(stat()))
+#     sp = multitaper([signal signal], JackknifeSurrogates(ShiftPredictor(stat(), lag)))
 #     @test_approx_eq t[1] sp[1]
 #     (tbias, tvar) = jackknife_bias_var(t...)
 #     (spbias, spvar) = jackknife_bias_var(sp...)

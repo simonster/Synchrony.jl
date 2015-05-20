@@ -48,16 +48,16 @@ surrogateval(::Coherence, v) = abs(v)
 surrogateval(::Coherency, v) = v
 
 # Single input matrix
-allocwork{T<:Real}(t::Union(Jackknife{Coherency}, Jackknife{Coherence}),
+allocwork{T<:Real}(t::Union(JackknifeSurrogates{Coherency}, JackknifeSurrogates{Coherence}),
                    X::AbstractVecOrMat{Complex{T}}) = allocwork(t.transform, X)
-function computestat!{T<:Real}(t::Union(Jackknife{Coherency}, Jackknife{Coherence}),
-                               out::JackknifeOutput,
+function computestat!{T<:Real}(t::Union(JackknifeSurrogates{Coherency}, JackknifeSurrogates{Coherence}),
+                               out::JackknifeSurrogatesOutput,
                                work::Union(Matrix{Complex{T}}, Nothing),
                                X::AbstractVecOrMat{Complex{T}})
     stat = t.transform
     trueval = out.trueval
     surrogates = out.surrogates
-    XXc::Matrix{Complex{T}} = isa(t, Jackknife{Coherence}) ? work : trueval
+    XXc::Matrix{Complex{T}} = isa(t, JackknifeSurrogates{Coherence}) ? work : trueval
     chkinput(trueval, X)
 
     Ac_mul_A!(XXc, X)
@@ -79,7 +79,7 @@ function computestat!{T<:Real}(t::Union(Jackknife{Coherency}, Jackknife{Coherenc
     end
 
     # Finish true value
-    if isa(t, Jackknife{Coherence})
+    if isa(t, JackknifeSurrogates{Coherence})
         cov2coh!(trueval, XXc, Base.AbsFun())
     else
         cov2coh!(trueval, XXc, Base.IdFun())
@@ -89,20 +89,20 @@ function computestat!{T<:Real}(t::Union(Jackknife{Coherency}, Jackknife{Coherenc
 end
 
 # Two input matrices
-allocwork{T<:Real}(t::Jackknife{Coherency}, X::AbstractVecOrMat{Complex{T}},
+allocwork{T<:Real}(t::JackknifeSurrogates{Coherency}, X::AbstractVecOrMat{Complex{T}},
                    Y::AbstractVecOrMat{Complex{T}}) =
     (nothing, cov2coh_work(X), cov2coh_work(Y))
-allocwork{T<:Real}(t::Jackknife{Coherence}, X::AbstractVecOrMat{Complex{T}},
+allocwork{T<:Real}(t::JackknifeSurrogates{Coherence}, X::AbstractVecOrMat{Complex{T}},
                    Y::AbstractVecOrMat{Complex{T}}) =
     (Array(Complex{T}, nchannels(X), nchannels(Y)), cov2coh_work(X), cov2coh_work(Y))
-function computestat!{T<:Real,V}(t::Union(Jackknife{Coherency}, Jackknife{Coherence}),
-                                 out::JackknifeOutput,
+function computestat!{T<:Real,V}(t::Union(JackknifeSurrogates{Coherency}, JackknifeSurrogates{Coherence}),
+                                 out::JackknifeSurrogatesOutput,
                                  work::@compat(Tuple{V, Array{T}, Array{T}}),
                                  X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
     stat = t.transform
     trueval = out.trueval
     surrogates = out.surrogates
-    XYc::Matrix{Complex{T}} = isa(t, Jackknife{Coherence}) ? work[1] : trueval
+    XYc::Matrix{Complex{T}} = isa(t, JackknifeSurrogates{Coherence}) ? work[1] : trueval
     chkinput(trueval, X, Y)
 
     Ac_mul_B!(XYc, X, Y)
@@ -129,7 +129,7 @@ function computestat!{T<:Real,V}(t::Union(Jackknife{Coherency}, Jackknife{Cohere
     end
 
     # Finish true value
-    if isa(t, Jackknife{Coherence})
+    if isa(t, JackknifeSurrogates{Coherence})
         cov2coh!(trueval, X, Y, work[2], work[3], XYc, Base.AbsFun())
     else
         cov2coh!(trueval, X, Y, work[2], work[3], XYc, Base.IdFun())

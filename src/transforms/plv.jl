@@ -127,10 +127,10 @@ end
 #
 
 # Single input matrix
-allocwork{T<:Real}(t::Union(Jackknife{MeanPhaseDiff}, Jackknife{PPC}, Jackknife{PLV}), X::AbstractVecOrMat{Complex{T}}) =
+allocwork{T<:Real}(t::Union(JackknifeSurrogates{MeanPhaseDiff}, JackknifeSurrogates{PPC}, JackknifeSurrogates{PLV}), X::AbstractVecOrMat{Complex{T}}) =
     allocwork(PLV(t.transform.normalized), X)
-@normalized t.transform function computestat!{S<:Union(MeanPhaseDiff, PLV, PPC), T<:Real}(t::Jackknife{S},
-                                                                                          out::JackknifeOutput,
+@normalized t.transform function computestat!{S<:Union(MeanPhaseDiff, PLV, PPC), T<:Real}(t::JackknifeSurrogates{S},
+                                                                                          out::JackknifeSurrogatesOutput,
                                                                                           work::Union(MeanPhaseDiffWork{T}, PLVWork{T,Matrix{Complex{T}}}),
                                                                                           X::AbstractVecOrMat{Complex{T}})
     trueval = out.trueval
@@ -160,10 +160,10 @@ allocwork{T<:Real}(t::Union(Jackknife{MeanPhaseDiff}, Jackknife{PPC}, Jackknife{
 end
 
 # Two input matrices
-allocwork{T<:Real}(t::Union(Jackknife{MeanPhaseDiff}, Jackknife{PPC}, Jackknife{PLV}), X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
+allocwork{T<:Real}(t::Union(JackknifeSurrogates{MeanPhaseDiff}, JackknifeSurrogates{PPC}, JackknifeSurrogates{PLV}), X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
     allocwork(PLV(t.transform.normalized), X, Y)
-@normalized t.transform function computestat!{S<:Union(MeanPhaseDiff, PLV, PPC), T<:Real}(t::Jackknife{S},
-                                                                                          out::JackknifeOutput,
+@normalized t.transform function computestat!{S<:Union(MeanPhaseDiff, PLV, PPC), T<:Real}(t::JackknifeSurrogates{S},
+                                                                                          out::JackknifeSurrogatesOutput,
                                                                                           work::Union(MeanPhaseDiffWork{T}, PLVWork{T,Matrix{Complex{T}}}),
                                                                                           X::AbstractVecOrMat{Complex{T}},
                                                                                           Y::AbstractVecOrMat{Complex{T}})
