@@ -15,7 +15,7 @@ computestat!{T<:Real}(::Coherency, out::AbstractMatrix{Complex{T}}, work::Void,
 allocwork{T<:Real}(::Coherency, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
     (cov2coh_work(X), cov2coh_work(Y))
 function computestat!{T<:Real}(::Coherency, out::AbstractMatrix{Complex{T}},
-                      work::@compat(Tuple{Array{T}, Array{T}}),
+                      work::Tuple{Array{T}, Array{T}},
                       X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
     cov2coh!(out, X, Y, work[1], work[2], Ac_mul_B!(out, X, Y))
 end
@@ -39,7 +39,7 @@ computestat!{T<:Real}(::Coherence, out::AbstractMatrix{T},
 allocwork{T<:Real}(::Coherence, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
     (Array(Complex{T}, nchannels(X), nchannels(Y)), cov2coh_work(X), cov2coh_work(Y))
 computestat!{T<:Real}(::Coherence, out::AbstractMatrix{T},
-                      work::@compat(Tuple{Matrix{Complex{T}}, Array{T}, Array{T}}),
+                      work::Tuple{Matrix{Complex{T}}, Array{T}, Array{T}},
                       X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) = 
     cov2coh!(out, X, Y, work[2], work[3], Ac_mul_B!(work[1], X, Y), Base.AbsFun())
 
@@ -99,7 +99,7 @@ allocwork{T<:Real}(t::JackknifeSurrogates{Coherence}, X::AbstractVecOrMat{Comple
     (Array(Complex{T}, nchannels(X), nchannels(Y)), cov2coh_work(X), cov2coh_work(Y))
 function computestat!{T<:Real,V}(t::Union(JackknifeSurrogates{Coherency}, JackknifeSurrogates{Coherence}),
                                  out::JackknifeSurrogatesOutput,
-                                 work::@compat(Tuple{V, Array{T}, Array{T}}),
+                                 work::Tuple{V, Array{T}, Array{T}},
                                  X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
     stat = t.transform
     trueval = out.trueval

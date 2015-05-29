@@ -28,7 +28,7 @@ allocwork{T<:Real}(t::UniformScores, X::AbstractVecOrMat{Complex{T}}) =
 # Single input matrix
 using Base.Sort: DEFAULT_UNSTABLE, Perm, Forward
 function computestat!{T<:Real}(t::UniformScores, out::AbstractMatrix{T},
-                               work::@compat(Tuple{Matrix{T}, Vector{T}, Vector{Int}, Vector{Complex{T}}, Vector{Complex{T}}}), X::AbstractVecOrMat{Complex{T}})
+                               work::Tuple{Matrix{T}, Vector{T}, Vector{Int}, Vector{Complex{T}}, Vector{Complex{T}}}, X::AbstractVecOrMat{Complex{T}})
     chkinput(out, X)
     angles, anglediff, ranks, circranks, d = work
     (size(X, 1) == size(angles, 1) == length(anglediff) == length(ranks) == length(circranks) == length(t.groups) &&

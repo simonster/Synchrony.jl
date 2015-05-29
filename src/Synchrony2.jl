@@ -1,5 +1,5 @@
 module Synchrony2
-using DSP, Compat
+using DSP
 
 export frequencies
 

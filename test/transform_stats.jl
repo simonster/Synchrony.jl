@@ -1,4 +1,4 @@
-using Synchrony2, Base.Test, CrossDecomposition, Compat
+using Synchrony2, Base.Test, CrossDecomposition
 
 # Tests for statistics determined by cross spectrum
 angles = [
@@ -146,7 +146,7 @@ csinput = [csinput expi]
 # Generate bootstrap weights
 bsindices = rand(1:size(csinput, 1), size(csinput, 1), 10)
 permindices = Permutation(Coherence(), size(csinput, 1), 10).indices
-groups = Vector{@compat(Tuple{Int,Int})}[[(1, 2)], [(3, 2)], [(1, 2), (2, 3)]]
+groups = Vector{Tuple{Int,Int}}[[(1, 2)], [(3, 2)], [(1, 2), (2, 3)]]
 
 for stat in [Coherence, Coherency, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, WPLI, WPLI2Debiased, JammalamadakaR, JuppMardiaR]
     # Test GroupMean
@@ -225,9 +225,9 @@ snr = 5*reshape(rand(10), 1, 10)
 inputs = rand(100, 10, 2, 2).*exp(im*(offsets .+ randn(100, 10, 2, 2)./snr))
 
 ngroups = 10
-groups = Array(Vector{@compat(Tuple{Int, Int})}, ngroups)
+groups = Array(Vector{Tuple{Int, Int}}, ngroups)
 for igroup = 1:ngroups
-    pairs = Array(@compat(Tuple{Int, Int}), rand(1:10))
+    pairs = Array(Tuple{Int, Int}, rand(1:10))
     for ipair = 1:length(pairs)
         ch1 = rand(1:size(inputs, 2))
         ch2 = rand(1:size(inputs, 2)-1)

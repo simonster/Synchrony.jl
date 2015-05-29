@@ -42,7 +42,7 @@ immutable JuppMardiaRWorkX{T<:Real}
 end
 allocwork{T<:Real}(t::JuppMardiaR{true}, X::AbstractVecOrMat{Complex{T}}) =
     (Array(T, size(X, 1), size(X, 2)*2),  Array(T, size(X, 2)*2, size(X, 2)*2))
-function computestat!{T<:Real}(t::JuppMardiaR{true}, out::AbstractMatrix{T}, work::@compat(Tuple{Matrix{T}, Matrix{T}}),
+function computestat!{T<:Real}(t::JuppMardiaR{true}, out::AbstractMatrix{T}, work::Tuple{Matrix{T}, Matrix{T}},
                                X::AbstractVecOrMat{Complex{T}})
     chkinput(out, X)
     workX, covwork = work
