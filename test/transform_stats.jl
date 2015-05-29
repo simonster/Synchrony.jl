@@ -132,19 +132,34 @@ s2 = exp(im*2pi*[1/18:1/9:11+1/18;]).*repmat([0.99; ones(9)*0.01], 10)
 out = computestat(HurtadoModulationIndex(10), s1, s2)
 @test_approx_eq out[1] dumbcfc(s1, s2, 10)
 
+# Test UniformScores
+d = [50, 120, 192, 210, 220, 250, 262, 291, 292, 320, 321, 340,
+     0, 20, 40, 60, 160, 171, 200, 221, 270, 294, 341, 350,
+     10, 11, 21, 22, 31, 32, 41, 150, 151, 152, 170, 190, 293,
+     30, 70, 110, 172, 180, 191, 240, 251, 260, 261, 290, 351]
+groups = [fill(1, 12); fill(2, 12); fill(3, 13); fill(4, 12)]
+v = computestat(UniformScores(groups), Complex128[rand(length(d)).*cis(d/180*pi) zeros(length(d))])
+@test_approx_eq_eps v[1, 2] 12.81 0.01
+
 csinput = [csinput expi]
 
 # Generate bootstrap weights
-bsweights = zeros(Int32, size(csinput, 1), 10)
-bsindices = rand(1:size(csinput, 1), size(bsweights))
-for iboot = 1:size(bsindices, 2), itrial = 1:size(bsindices, 1)
-    @inbounds bsweights[bsindices[itrial, iboot], iboot] += @compat Int32(1)
-end
-bsweights = bsweights'
+bsindices = rand(1:size(csinput, 1), size(csinput, 1), 10)
+permindices = Permutation(Coherence(), size(csinput, 1), 10).indices
+groups = Vector{@compat(Tuple{Int,Int})}[[(1, 2)], [(3, 2)], [(1, 2), (2, 3)]]
 
-for stat in (Coherence, Coherency, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, WPLI, WPLI2Debiased, JammalamadakaR, JuppMardiaR)
-    # Test JackknifeSurrogates
+for stat in [Coherence, Coherency, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, WPLI, WPLI2Debiased, JammalamadakaR, JuppMardiaR]
+    # Test GroupMean
     trueval = computestat(stat(), csinput)
+    gmstat = GroupMean(stat(), size(csinput, 2), groups)
+    # @show work = Synchrony2.allocwork(gmstat, csinput)
+    # @show output = Synchrony2.allocoutput(gmstat, csinput)
+    # @show @which Synchrony2.computestat!(gmstat, output, work, csinput)
+    # @show @code_warntype Synchrony2.computestat!(gmstat, output, work, csinput)
+    gm = computestat(GroupMean(stat(), size(csinput, 2), groups), csinput)
+    @test_approx_eq gm [trueval[1, 2], trueval[2, 3], (trueval[1, 2] + trueval[2, 3])/2]
+
+    # Test JackknifeSurrogates
     estimates = zeros(eltype(trueval), size(csinput, 1), size(csinput, 2), size(csinput, 2))
     for i = 1:size(csinput, 1)
         estimates[i, :, :] = computestat(stat(), csinput[[1:i-1; i+1:size(csinput, 1)], :])
@@ -161,8 +176,8 @@ for stat in (Coherence, Coherency, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, W
     @test_approx_eq jn.trueval trueval
     @test_approx_eq jn.var jnvar
 
-    # Test GroupJackknife
-    jn = computestat(GroupJackknife(stat(), size(csinput, 2), Vector{@compat(Tuple{Int,Int})}[[(1, 2)], [(3, 2)], [(1, 2), (2, 3)]]), csinput)
+    # Test Jackknife{GroupMean}
+    jn = computestat(Jackknife(GroupMean(stat(), size(csinput, 2), groups)), csinput)
     @test_approx_eq jn.trueval [trueval[1, 2], trueval[2, 3], (trueval[1, 2] + trueval[2, 3])/2]
     est2 = mean([estimates[:, 1, 2] estimates[:, 2, 3]], 2)
     @test_approx_eq jn.var [jnvar[1, 2], jnvar[2, 3], var(est2, corrected=false)*(size(csinput, 1)-1)]
@@ -188,12 +203,20 @@ for stat in (Coherence, Coherency, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, W
     @test_approx_eq jackknife_var(jn) squeeze(sum(abs2(estimates .- mean(estimates, 1)), 1), 1)*(size(csinput, 1)-1)/size(csinput, 1)
 
     # Test bootstrap
-    estimates = zeros(eltype(trueval), size(bsweights, 1), size(csinput, 2), size(csinput, 2))
-    for i = 1:size(bsweights, 1)
-        estimates[i, :, :] = computestat(stat(), csinput[bsindices[:, i], :])
+    estimates = zeros(eltype(trueval), size(csinput, 2), size(csinput, 2), size(bsindices, 2))
+    for i = 1:size(bsindices, 2)
+        estimates[:, :, i] = computestat(stat(), csinput[bsindices[:, i], :])
     end
-    bs = computestat(Bootstrap(stat(), bsweights), csinput)
+    bs = computestat(Bootstrap(stat(), bsindices), csinput)
     @test_approx_eq bs estimates
+
+    # Test permutations
+    estimates = zeros(eltype(trueval), size(csinput, 2), size(csinput, 2), size(permindices, 2))
+    for i = 1:size(permindices, 2)
+        estimates[:, :, i] = computestat(stat(), csinput[permindices[:, i], :], csinput)
+    end
+    perms = computestat(Permutation(stat(), permindices), csinput)
+    @test_approx_eq perms estimates
 end
 
 # Test nd
@@ -202,9 +225,9 @@ snr = 5*reshape(rand(10), 1, 10)
 inputs = rand(100, 10, 2, 2).*exp(im*(offsets .+ randn(100, 10, 2, 2)./snr))
 
 ngroups = 10
-groups = Array(Vector{(Int, Int)}, ngroups)
+groups = Array(Vector{@compat(Tuple{Int, Int})}, ngroups)
 for igroup = 1:ngroups
-    pairs = Array((Int, Int), rand(1:10))
+    pairs = Array(@compat(Tuple{Int, Int}), rand(1:10))
     for ipair = 1:length(pairs)
         ch1 = rand(1:size(inputs, 2))
         ch2 = rand(1:size(inputs, 2)-1)
@@ -216,7 +239,7 @@ end
 
 nbootstraps = 10
 
-for stat in (Coherence, Coherency, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, WPLI, WPLI2Debiased, JammalamadakaR, JuppMardiaR)
+for stat in [Coherence, Coherency, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, WPLI, WPLI2Debiased, JammalamadakaR, JuppMardiaR]
     # True statistic
     tv = mapslices(x->computestat(stat(), x), inputs, (1, 2))
     @test_approx_eq computestat(stat(), inputs) tv 
@@ -231,18 +254,20 @@ for stat in (Coherence, Coherency, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, W
     @test_approx_eq jn.trueval tv
     @test_approx_eq jn.var mapslices(x->computestat(Jackknife(stat()), x).var, inputs, (1, 2))
 
-    # GroupJackknife
-    jn = computestat(GroupJackknife(stat(), size(inputs, 2), groups), inputs)
-    @test_approx_eq jn.trueval mapslices(x->computestat(GroupJackknife(stat(), size(inputs, 2), groups), x).trueval, inputs, (1, 2))
-    @test_approx_eq jn.var mapslices(x->computestat(GroupJackknife(stat(), size(inputs, 2), groups), x).var, inputs, (1, 2))
+    # Jackknife{GroupMean}
+    jn = computestat(Jackknife(GroupMean(stat(), size(inputs, 2), groups)), inputs)
+    @test_approx_eq jn.trueval mapslices(x->computestat(Jackknife(GroupMean(stat(), size(inputs, 2), groups)), x).trueval, inputs, (1, 2))
+    @test_approx_eq jn.var mapslices(x->computestat(Jackknife(GroupMean(stat(), size(inputs, 2), groups)), x).var, inputs, (1, 2))
 
-    # Bootstrap
-    bs = Bootstrap(stat(), size(inputs, 1), nbootstraps)
-    bstrue = zeros(eltype(tv), nbootstraps, size(inputs, 2), size(inputs, 2), size(inputs)[3:end]...)
-    for i = 1:Base.trailingsize(inputs, 3)
-        bstrue[:, :, :, i] = computestat(bs, inputs[:, :, i])
+    # Bootstrap and Permutation
+    for t in (Bootstrap, Permutation)
+    bs = t(stat(), size(inputs, 1), nbootstraps)
+        bstrue = zeros(eltype(tv), size(inputs, 2), size(inputs, 2), nbootstraps, size(inputs)[3:end]...)
+        for i = 1:Base.trailingsize(inputs, 3)
+            bstrue[:, :, :, i] = computestat(bs, inputs[:, :, i])
+        end
+        @test_approx_eq computestat(bs, inputs) bstrue
     end
-    @test_approx_eq computestat(bs, inputs) bstrue
 end
 
 # Test shift predictor
@@ -269,16 +294,3 @@ end
 #     @test_approx_eq tbias spbias
 #     @test_approx_eq tvar spvar
 # end
-
-# Test permutations
-#
-# There's no good test for whether the output is "correct," but we test
-# a case where the permuted output should be unity and a case where it
-# shouldn't
-# x = 0:63
-# ft = mtfft(repeat(signal[:, 1, 1], inner=[1, 2, 35]))
-# perms = permstat(Coherence(), ft, 10)
-# @test_approx_eq perms ones(size(perms))
-# ft = mtfft([signal signal])
-# perms = permstat(Coherence(), ft, 10)
-# @test all(perms .!= 1)

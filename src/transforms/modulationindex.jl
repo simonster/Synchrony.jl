@@ -12,10 +12,11 @@
 # hippocampus during performance of a T-maze task. Proceedings of the
 # National Academy of Sciences, 105(51), 20517–20522.
 # doi:10.1073/pnas.0810524105
-immutable HurtadoModulationIndex <: RealPairwiseStatistic
+immutable HurtadoModulationIndex <: PairwiseStatistic
     nbins::Uint8
 end
 HurtadoModulationIndex() = HurtadoModulationIndex(18)
+Base.eltype{T<:Real}(::HurtadoModulationIndex, X::AbstractArray{Complex{T}}) = T
 
 allocwork{T<:Real}(t::HurtadoModulationIndex, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
     (Array(Uint8, size(X, 1), size(X, 2)), Array(Int, t.nbins, nchannels(X)),

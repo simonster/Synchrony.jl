@@ -1,8 +1,8 @@
 export computestat, computestat!, PowerSpectrum, CrossSpectrum, Coherency,
        Coherence, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, WPLI,
        WPLI2Debiased, JammalamadakaR, JuppMardiaR,
-       HurtadoModulationIndex, JackknifeSurrogates, jackknife_bias, jackknife_var, Jackknife,
-       GroupJackknife, Bootstrap, genweights
+       HurtadoModulationIndex, UniformScores, JackknifeSurrogates, Jackknife,
+       jackknife_bias, jackknife_var, Bootstrap, Permutation, GroupMean
 
 #
 # Utilities
@@ -112,20 +112,20 @@ chkinput(out, X, Y) = (chkXY(X, Y); chkout(out, X, Y))
 abstract Statistic
 
 abstract PairwiseStatistic <: Statistic
-abstract RealPairwiseStatistic <: PairwiseStatistic
-abstract ComplexPairwiseStatistic <: PairwiseStatistic
+abstract NormalizedPairwiseStatistic{Normalized} <: PairwiseStatistic
 
 # General definitions of allocoutput
-Base.eltype{T<:Real}(::RealPairwiseStatistic, X::AbstractArray{Complex{T}}) = T
-Base.eltype{T<:Real}(::ComplexPairwiseStatistic, X::AbstractArray{Complex{T}}) = Complex{T}
-Base.eltype{T<:Real,S<:Real}(::RealPairwiseStatistic, X::AbstractArray{Complex{T}}, Y::AbstractArray{Complex{S}}) =
-    promote_type(T, S)
-Base.eltype{T<:Real,S<:Real}(::ComplexPairwiseStatistic, X::AbstractArray{Complex{T}}, Y::AbstractArray{Complex{S}}) =
-    Complex{promote_type(T, S)}
+Base.eltype{T<:Real,S<:Real}(s::PairwiseStatistic, X::AbstractArray{Complex{T}}, Y::AbstractArray{Complex{S}}) =
+    promote_type(eltype(s, X), eltype(s, Y))
 allocoutput{T<:Real}(t::PairwiseStatistic, X::AbstractVecOrMat{Complex{T}}) =
     zeros(eltype(t, X), size(X, 2), size(X, 2))
 allocoutput{T<:Real}(t::PairwiseStatistic, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
     zeros(eltype(t, X, Y), size(X, 2), size(Y, 2))
+
+#
+# Diagonal values
+#
+diagval{T<:Statistic}(::Type{T}) = nothing
 
 #
 # Handling of n-d arrays
@@ -155,10 +155,10 @@ for n = 3:6
 end
 
 computestat!{T<:Complex}(t::Statistic, out::AbstractArray, work, X::AbstractVecOrMat{T}) =
-    error("computestat! not defined for $(typeof(t)) with single input matrix, or incorrect work given")
+    error("computestat! not defined for $(typeof(t)) with single input matrix, or incorrect work $(typeof(work)) or output $(typeof(out)) given")
 computestat!{T<:Complex}(t::Statistic, out::AbstractArray, work, X::AbstractVecOrMat{T}, Y::AbstractVecOrMat{T}) =
-    error("computestat! not defined for $(typeof(t)) with two input matrices, or incorrect work given")
-function computestat!{T<:Complex}(t::Statistic, out::AbstractArray, work, X::AbstractArray{T})
+    error("computestat! not defined for $(typeof(t)) with two input matrices, or incorrect work $(typeof(work)) or output $(typeof(out)) given")
+function computestat!{T<:Complex,V}(t::Statistic, out::AbstractArray, work::V, X::AbstractArray{T})
     !isempty(X) || error(ArgumentError("X is empty"))
     lead = size(X, 1)*size(X, 2)
     leadout = size(X, 2)*size(X, 2)
@@ -172,7 +172,7 @@ function computestat!{T<:Complex}(t::Statistic, out::AbstractArray, work, X::Abs
     out
 end
 
-function computestat!{T<:Complex}(t::Statistic, out::AbstractArray, work, X::AbstractArray{T}, Y::AbstractArray{T})
+function computestat!{T<:Complex,V}(t::Statistic, out::AbstractArray, work::V, X::AbstractArray{T}, Y::AbstractArray{T})
     leadX = size(X, 1)*size(X, 2)
     leadY = size(Y, 1)*size(Y, 2)
     leadout = size(X, 2)*size(Y, 2)
@@ -188,43 +188,111 @@ function computestat!{T<:Complex}(t::Statistic, out::AbstractArray, work, X::Abs
     out
 end
 
-# Macro to normalize variables on entry
-macro normalized(args...)
-    if length(args) == 1
-        fn = args[1]
-        transform = :t
-    elseif length(args) == 2
-        transform, fn = args
-    else
-        throw(ArgumentError("@normalized: unexpected syntax"))
-    end
+#
+# Normalized statistics
+#
 
-    fndef = fn.args[1].args[1]
-    if isa(fndef, Expr)
-        fndef.head != :curly && throw(ArgumentError("@normalized: unexpected syntax"))
-        fnname = fndef.args[1]
-        normalizedname = symbol("normalized_$(fnname)")
-        normalizedsig = Expr(:curly, normalizedname, fndef.args[2:end]...)
-    else
-        fnname = fndef
-        normalizedname = symbol("normalized_$(fnname)")
-        normalizedsig = normalizedname
-    end
-    fnargs = [isa(x, Symbol) ? x : x.args[1] for x in fn.args[1].args[2:end]]
-    fnsig = fn.args[1]
-    fn.args[1] = Expr(:call, normalizedsig, fn.args[1].args[2:end]...)
-    esc(Expr(:block,
-        Expr(:function, fnsig, quote
-            if $(transform).normalized
-                $(normalizedname)($(fnargs...),)
-            else
-                $(normalizedname)($([x == :X || x == :Y ? :(unitnormalize!(work.$(symbol("normalized$(x)")), $x)) : x for x in fnargs]...),)
-            end
-        end),
-        fn
-    ))
+stagedfunction normalized(t::NormalizedPairwiseStatistic{false})
+    :($(t.name.name){true}())
 end
 
+allocwork{T<:Real}(t::NormalizedPairwiseStatistic{false}, X::AbstractVecOrMat{Complex{T}}) =
+    (Array(Complex{T}, size(X, 1), size(X, 2)), allocwork(normalized(t), X))
+allocwork{T<:Real}(t::NormalizedPairwiseStatistic{false}, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
+    (Array(Complex{T}, size(X, 1), size(X, 2)), Array(Complex{T}, size(X, 1), size(X, 2)), allocwork(normalized(t), X, Y))
+computestat!{T<:Real}(t::NormalizedPairwiseStatistic{false}, out::AbstractArray,
+                      work::@compat(Tuple{Matrix{Complex{T}}, Any}), X::AbstractVecOrMat{Complex{T}}) =
+    computestat!(normalized(t), out, work[2], unitnormalize!(work[1], X))
+computestat!{T<:Real}(t::NormalizedPairwiseStatistic{false}, out::AbstractArray,
+                      work::@compat(Tuple{Matrix{Complex{T}}, Matrix{Complex{T}}, Any}),
+                      X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
+    computestat!(normalized(t), out, work[3], unitnormalize!(work[1], X), unitnormalize!(work[2], Y))
+
+#
+# GroupMean
+#
+
+immutable GroupMean{R<:Statistic} <: Statistic
+    transform::R
+    indices::Vector{Int}
+    offsets::Vector{Int}
+    nchannels::Int
+end
+ngroups(x::GroupMean) = length(x.offsets)-1
+
+function GroupMean(t::Statistic, nchannels::Int, pairs::Vector{Vector{@compat(Tuple{Int,Int})}})
+    indices = Int[]
+    offsets = Int[1]
+    for ipairgroup = 1:length(pairs)
+        pairgroup = pairs[ipairgroup]
+        for ipair in 1:size(pairgroup, 1)
+            ch1, ch2 = pairgroup[ipair]
+            (ch1 > nchannels || ch2 > nchannels || ch1 < 1 || ch2 < 1) && throw(ArgumentError("channel indices must be in range [1, nchannels"))
+            if ch1 > ch2
+                ch1, ch2 = ch2, ch1
+            end
+            push!(indices, (ch2-1)*nchannels+ch1)
+        end
+        push!(offsets, length(indices)+1)
+    end
+    GroupMean(t, indices, offsets, nchannels)
+end
+
+for n = 2:6
+    @eval begin
+        allocoutput{T<:Complex,R<:PairwiseStatistic}(t::GroupMean{R}, X::AbstractArray{T,$n}, Y::AbstractArray{T,$n}=X) =
+            zeros(eltype(t.transform, X, Y), ngroups(t), $([:(size(X, $i)) for i = 3:n]...))
+    end
+end
+
+allocwork{T<:Real}(t::GroupMean, X::AbstractVecOrMat{Complex{T}}) =
+    (allocoutput(t.transform, X), allocwork(t.transform, X))
+allocwork{T<:Real}(t::GroupMean, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
+    (allocoutput(t.transform, X, Y), allocwork(t.transform, X, Y))
+
+function grouppairs!{T}(t::GroupMean, out::AbstractVector{T}, chval::AbstractMatrix{T})
+    length(out) == ngroups(t) || throw(ArgumentError("invalid output size"))
+    @inbounds for ipairgroup = 1:ngroups(t)
+        m = zero(T)
+        @simd for ipair = t.offsets[ipairgroup]:t.offsets[ipairgroup+1]-1
+            pairindex = t.indices[ipair]
+            m += chval[pairindex]
+        end
+        out[ipairgroup] = m/(t.offsets[ipairgroup+1]-t.offsets[ipairgroup])
+    end
+    out
+end
+
+function computestat!{T<:Real}(t::GroupMean, out::AbstractArray, work::@compat(Tuple{Matrix, Any}),
+                               X::AbstractVecOrMat{Complex{T}})
+    chval, twork = work
+    computestat!(t.transform, chval, twork, X)
+    grouppairs!(t, out, chval)
+    out
+end
+function computestat!{T<:Real}(t::GroupMean, out::AbstractArray, work::@compat(Tuple{Matrix, Any}),
+                               X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
+    chval, twork = work
+    computestat!(t.transform, chval, twork, X, Y)
+    grouppairs!(t, out, chval)
+    out
+end
+
+# Group stats on n-d arrays
+function computestat!{T<:Real}(t::GroupMean, out::AbstractArray, work::@compat(Tuple{Matrix, Any}),
+                               X::AbstractArray{Complex{T}})
+    for i = 1:Base.trailingsize(X, 3)
+        computestat!(t, sub(out, :, i), work, sub(X, :, :, i))
+    end
+    out
+end
+function computestat!{T<:Real}(t::GroupMean, out::AbstractArray, work::@compat(Tuple{Matrix, Any}),
+                               X::AbstractArray{Complex{T}}, Y::AbstractArray{Complex{T}})
+    for i = 1:Base.trailingsize(X, 3)
+        computestat!(t, sub(out, :, i), work, sub(X, :, :, i), sub(Y, :, :, i))
+    end
+    out
+end
 
 #
 # (Inefficient) generic jackknife surrogate computation
@@ -261,8 +329,7 @@ function allocwork{T<:Real}(t::JackknifeSurrogates, X::AbstractVecOrMat{Complex{
     Xsurrogate = Array(Complex{T}, size(X, 1)-1, size(X, 2))
     (Xsurrogate, allocoutput(t.transform, Xsurrogate), allocwork(t.transform, X), allocwork(t.transform, Xsurrogate))
 end
-function computestat!{T<:Real,V}(t::JackknifeSurrogates, out::JackknifeSurrogatesOutput,
-                                 work::@compat(Tuple{Matrix{Complex{T}}, Any, V, V}),
+function computestat!{T<:Real,V}(t::JackknifeSurrogates, out::JackknifeSurrogatesOutput, work::V,
                                  X::AbstractVecOrMat{Complex{T}})
     stat = t.transform
     ntrials, nch = size(X)
@@ -270,7 +337,8 @@ function computestat!{T<:Real,V}(t::JackknifeSurrogates, out::JackknifeSurrogate
     trueval = out.trueval
     surrogates = out.surrogates
 
-    (size(Xsurrogate, 1) == ntrials - 1 && size(Xsurrogate, 2) == nch) || error("invalid work object")
+    (isa(work, @compat(Tuple{Matrix{Complex{T}}, Any, Any, Any})) &&
+     size(Xsurrogate, 1) == ntrials - 1 && size(Xsurrogate, 2) == nch) || error("invalid work object")
     chkinput(trueval, X)
 
     fill!(surrogates, NaN)
@@ -300,7 +368,7 @@ function allocwork{T<:Real}(t::JackknifeSurrogates, X::AbstractVecOrMat{Complex{
      allocwork(t.transform, X, Y), allocwork(t.transform, Xsurrogate, Ysurrogate))
 end
 function computestat!{T<:Real,V}(t::JackknifeSurrogates, out::JackknifeSurrogatesOutput,
-                                 work::@compat(Tuple{Matrix{Complex{T}}, Matrix{Complex{T}}, Any, V, V}),
+                                 work::V,
                                  X::AbstractVecOrMat{Complex{T}},
                                  Y::AbstractVecOrMat{Complex{T}})
     ntrials, nchX = size(X)
@@ -310,7 +378,8 @@ function computestat!{T<:Real,V}(t::JackknifeSurrogates, out::JackknifeSurrogate
     surrogates = out.surrogates
     stat = t.transform
 
-    (size(Xsurrogate, 1) == ntrials - 1 && size(Xsurrogate, 2) == nchX &&
+    (isa(work, @compat(Tuple{Matrix{Complex{T}}, Matrix{Complex{T}}, Any, Any, Any})) &&
+     size(Xsurrogate, 1) == ntrials - 1 && size(Xsurrogate, 2) == nchX &&
      size(Ysurrogate, 1) == ntrials - 1 && size(Ysurrogate, 2) == nchY) || error("invalid work object")
     ntrials > 0 || error("X is empty")
     chkinput(trueval, X, Y)
@@ -336,6 +405,18 @@ function computestat!{T<:Real,V}(t::JackknifeSurrogates, out::JackknifeSurrogate
 
     out
 end
+
+# Only unit normalize once
+allocwork{R<:NormalizedPairwiseStatistic{false},T<:Real}(t::JackknifeSurrogates{R}, X::AbstractVecOrMat{Complex{T}}) =
+    (Array(Complex{T}, size(X, 1), size(X, 2)), allocwork(JackknifeSurrogates(normalized(t.transform)), X))
+allocwork{R<:NormalizedPairwiseStatistic{false},T<:Real}(t::JackknifeSurrogates{R}, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
+    (Array(Complex{T}, size(X, 1), size(X, 2)), Array(Complex{T}, size(Y, 1), size(Y, 2)), allocwork(JackknifeSurrogates(normalized(t.transform)), X, Y))
+computestat!{R<:NormalizedPairwiseStatistic{false},T<:Real}(t::JackknifeSurrogates{R}, out::JackknifeSurrogatesOutput,
+                                                            work, X::AbstractVecOrMat{Complex{T}}) =
+    computestat!(JackknifeSurrogates(normalized(t.transform)), out, work[2], unitnormalize!(work[1], X))
+computestat!{R<:NormalizedPairwiseStatistic{false},T<:Real}(t::JackknifeSurrogates{R}, out::JackknifeSurrogatesOutput,
+                                                            work, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
+    computestat!(JackknifeSurrogates(normalized(t.transform)), out, work[3], unitnormalize!(work[1], X), unitnormalize!(work[2], Y))
 
 # Estimate of variance from jackknife surrogates
 function _jackknife_var!{T}(out::AbstractArray{T}, surrogates::AbstractArray{T})
@@ -463,244 +544,263 @@ function computestat!{S,T<:Complex}(t::Jackknife, out::JackknifeOutput, work::S,
 end
 
 #
-# Computation of just the jackknife trueval and variance for pair groups
+# Jackknife{GroupMean}
 #
-immutable PairGroups
-    indices::Vector{Int}
-    offsets::Vector{Int}
-    nchannels::Int
-end
-ngroups(x::PairGroups) = length(x.offsets)-1
-
-immutable GroupJackknife{R<:Statistic} <: Statistic
-    transform::JackknifeSurrogates{R}
-    pairgroups::PairGroups
-end
-
-function GroupJackknife(t::Statistic, nchannels::Int, pairs::Vector{Matrix{Int}})
-    indices = Int[]
-    offsets = Int[1]
-    for ipairgroup = 1:length(pairs)
-        pairgroup = pairs[ipairgroup]
-        size(pairgroup, 1) == 1 || throw(ArgumentError("pair groups must be specified as a vector of 2 x n matrices or a vector of (Int, Int) tuples"))
-        for ipair in 1:size(pairgroup, 1)
-            ch1 = pairgroup[1, ipair]
-            ch2 = pairgroup[2, ipair]
-            (ch1 > nchannels || ch2 > nchannels || ch1 < 1 || ch2 < 1) && throw(ArgumentError("channel indices must be in range [1, nchannels"))
-            if ch1 > ch2
-                ch1, ch2 = ch2, ch1
-            end
-            push!(indices, (ch2-1)*nchannels+ch1)
-        end
-        push!(offsets, length(indices)+1)
-    end
-    GroupJackknife(JackknifeSurrogates(t), PairGroups(indices, offsets, nchannels))
-end
-
-function GroupJackknife(t::Statistic, nchannels::Int, pairs::Vector{Vector{@compat(Tuple{Int,Int})}})
-    indices = Int[]
-    offsets = Int[1]
-    for ipairgroup = 1:length(pairs)
-        pairgroup = pairs[ipairgroup]
-        for ipair in 1:size(pairgroup, 1)
-            ch1, ch2 = pairgroup[ipair]
-            (ch1 > nchannels || ch2 > nchannels || ch1 < 1 || ch2 < 1) && throw(ArgumentError("channel indices must be in range [1, nchannels"))
-            if ch1 > ch2
-                ch1, ch2 = ch2, ch1
-            end
-            push!(indices, (ch2-1)*nchannels+ch1)
-        end
-        push!(offsets, length(indices)+1)
-    end
-    GroupJackknife(JackknifeSurrogates(t), PairGroups(indices, offsets, nchannels))
-end
 
 for n = 2:6
     @eval begin
-        allocoutput{T<:Complex}(t::GroupJackknife, X::AbstractArray{T,$n}, Y::AbstractArray{T,$n}=X) =
-            JackknifeOutput(zeros(eltype(t.transform.transform, X, Y), ngroups(t.pairgroups), $([:(size(X, $i)) for i = 3:n]...)),
-                            zeros(eltype(t.transform.transform, X, Y), ngroups(t.pairgroups), $([:(size(X, $i)) for i = 3:n]...)))
+        allocoutput{T<:Complex,R<:Statistic}(t::Jackknife{GroupMean{R}}, X::AbstractArray{T,$n}, Y::AbstractArray{T,$n}=X) =
+            JackknifeOutput(zeros(eltype(t.transform.transform.transform, X, Y), ngroups(t.transform.transform), $([:(size(X, $i)) for i = 3:n]...)),
+                            zeros(eltype(t.transform.transform.transform, X, Y), ngroups(t.transform.transform), $([:(size(X, $i)) for i = 3:n]...)))
     end
 end
 
-allocwork{T<:Real}(t::GroupJackknife, X::AbstractVecOrMat{Complex{T}}) =
-    (allocwork(t.transform, X), allocoutput(t.transform, X), zeros(eltype(t.transform.transform, X), size(X, 1), ngroups(t.pairgroups)))
-allocwork{T<:Real}(t::GroupJackknife, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
-    (allocwork(t.transform, X, Y), allocoutput(t.transform, X, Y), zeros(eltype(t.transform.transform, X), size(X, 1), ngroups(t.pairgroups)))
+allocwork{T<:Real,R<:Statistic}(t::Jackknife{GroupMean{R}}, X::AbstractVecOrMat{Complex{T}}) =
+    (allocwork(JackknifeSurrogates(t.transform.transform.transform), X),
+     allocoutput(JackknifeSurrogates(t.transform.transform.transform), X),
+     zeros(eltype(t.transform.transform.transform, X), size(X, 1), ngroups(t.transform.transform)))
+allocwork{T<:Real,R<:Statistic}(t::Jackknife{GroupMean{R}}, X::AbstractVecOrMat{Complex{T}},
+                                Y::AbstractVecOrMat{Complex{T}}) =
+    (allocwork(JackknifeSurrogates(t.transform.transform.transform), X, Y),
+     allocoutput(JackknifeSurrogates(t.transform.transform.transform), X, Y),
+     zeros(eltype(t.transform.transform.transform, X), size(X, 1), ngroups(t.transform.transform)))
 
-function grouppairs!{T}(t::GroupJackknife, group_trueval::AbstractArray{T}, group_var::AbstractArray{T}, group_surrogates::AbstractMatrix{T}, jn::JackknifeSurrogatesOutput)
+function grouppairs!{T,R<:Statistic}(t::Jackknife{GroupMean{R}}, group_trueval::AbstractArray{T},
+                                     group_var::AbstractArray{T}, group_surrogates::AbstractMatrix{T},
+                                     jn::JackknifeSurrogatesOutput)
     fill!(group_surrogates, zero(T))
+    jnt = t.transform.transform
 
     # First compute means of groups and jackknife surrogates
-    @inbounds for ipairgroup = 1:ngroups(t.pairgroups)
+    @inbounds for ipairgroup = 1:ngroups(jnt)
         m = zero(T)
-        for ipair = t.pairgroups.offsets[ipairgroup]:t.pairgroups.offsets[ipairgroup+1]-1
-            pairindex = t.pairgroups.indices[ipair]
+        for ipair = jnt.offsets[ipairgroup]:jnt.offsets[ipairgroup+1]-1
+            pairindex = jnt.indices[ipair]
             m += jn.trueval[pairindex]
             @simd for isurrogate = 1:size(jn.surrogates, 1)
                 group_surrogates[isurrogate, ipairgroup] += jn.surrogates[isurrogate, pairindex]
             end
         end
-        group_trueval[ipairgroup] = m/(t.pairgroups.offsets[ipairgroup+1]-t.pairgroups.offsets[ipairgroup])
+        group_trueval[ipairgroup] = m/(jnt.offsets[ipairgroup+1]-jnt.offsets[ipairgroup])
     end
 
     # Now compute jackknife variances
     _jackknife_var!(group_var, group_surrogates)
 
     # Adjust for taking the means
-    for ipairgroup = 1:ngroups(t.pairgroups)
-        group_var[ipairgroup] /= abs2(t.pairgroups.offsets[ipairgroup+1]-t.pairgroups.offsets[ipairgroup])
+    for ipairgroup = 1:ngroups(jnt)
+        group_var[ipairgroup] /= abs2(jnt.offsets[ipairgroup+1]-jnt.offsets[ipairgroup])
     end
     nothing
 end
 
-function computestat!{T<:Real,S}(t::GroupJackknife, out::JackknifeOutput,
-                                 work::@compat(Tuple{Any, Array{S,3}, Array{S,2}}),
-                                 X::AbstractVecOrMat{Complex{T}})
-    computestat!(t.transform, work[2], work[1], X)
+function computestat!{R<:Statistic,T<:Real,S}(t::Jackknife{GroupMean{R}}, out::JackknifeOutput,
+                                              work::@compat(Tuple{Any, JackknifeSurrogatesOutput{Array{S,2}, Array{S,3}}, Array{S,2}}),
+                                              X::AbstractVecOrMat{Complex{T}})
+    computestat!(JackknifeSurrogates(t.transform.transform.transform), work[2], work[1], X)
     grouppairs!(t, out.trueval, out.var, work[3], work[2])
     out
 end
-function computestat!{T<:Real,S}(t::GroupJackknife, out::JackknifeOutput,
-                                 work::@compat(Tuple{Any, Array{S,3}, Array{S,2}}),
-                                 X::AbstractVecOrMat{Complex{T}},
-                                 Y::AbstractVecOrMat{Complex{T}})
-    computestat!(t.transform, work[2], work[1], X, Y)
+function computestat!{R<:Statistic,T<:Real,S}(t::Jackknife{GroupMean{R}}, out::JackknifeOutput,
+                                              work::@compat(Tuple{Any, JackknifeSurrogatesOutput{Array{S,2}, Array{S,3}}, Array{S,2}}),
+                                              X::AbstractVecOrMat{Complex{T}},
+                                              Y::AbstractVecOrMat{Complex{T}})
+    computestat!(JackknifeSurrogates(t.transform.transform.transform), work[2], work[1], X, Y)
     grouppairs!(t, out.trueval, out.var, work[3], work[2])
     out
 end
 
-# Jackknifing of n-d arrays
-function computestat!{S,T<:Complex}(t::GroupJackknife, out::JackknifeOutput, work::S, X::AbstractArray{T})
+# Group jackknifing of n-d arrays
+function computestat!{R<:Statistic,T<:Complex,S}(t::Jackknife{GroupMean{R}}, out::JackknifeOutput,
+                                                 work::@compat(Tuple{Any, JackknifeSurrogatesOutput{Array{S,2}, Array{S,3}}, Array{S,2}}), X::AbstractArray{T})
     !isempty(X) || error(ArgumentError("X is empty"))
     for i = 1:Base.trailingsize(X, 3)
-        computestat!(t.transform, work[2], work[1], sub(X, :, :, i))
+        computestat!(JackknifeSurrogates(t.transform.transform.transform), work[2], work[1], sub(X, :, :, i))
         grouppairs!(t, sub(out.trueval, :, i), sub(out.var, :, i), work[3], work[2])
     end
     out
 end
-function computestat!{S,T<:Complex}(t::GroupJackknife, out::JackknifeOutput, work::S, X::AbstractArray{T}, Y::AbstractArray{T})
+function computestat!{R<:Statistic,T<:Complex,S}(t::Jackknife{GroupMean{R}}, out::JackknifeOutput,
+                                                 work::@compat(Tuple{Any, JackknifeSurrogatesOutput{Array{S,2}, Array{S,3}}, Array{S,2}}), X::AbstractArray{T}, Y::AbstractArray{T})
     !isempty(X) || error(ArgumentError("X is empty"))
     for i = 1:Base.trailingsize(X, 3)
-        computestat!(t.transform, work[2], work[1], sub(X, :, :, i), sub(Y, :, :, i))
+        computestat!(JackknifeSurrogates(t.transform.transform.transform), work[2], work[1], sub(X, :, :, i), sub(Y, :, :, i))
         grouppairs!(t, sub(out.trueval, :, i), sub(out.var, :, i), work[3], work[2])
     end
     out
 end
 
 #
-# (Inefficient) generic bootstrap computation
+# Bootstrap
 #
 
 immutable Bootstrap{R<:Statistic} <: Statistic
     transform::R
-    weights::Matrix{Int32}    # Sample weights for each bootstrap. nbootstraps x ntrials
-                              # This is transposed for efficiency when weighting output
-
-    function Bootstrap(transform, weights)
-        any(sum(weights, 2) .!= size(weights, 2)) && throw(ArgumentError("weights must sum to ntrials"))
-        new(transform, weights)
-    end
+    indices::Matrix{Int32}    # Sample weights for each bootstrap. ntrials x nbootstraps
 end
-Bootstrap(transform::Statistic, weights) = Bootstrap{typeof(transform)}(transform, weights)
+Bootstrap{T<:Integer}(t::Statistic, indices::Matrix{T}) = Bootstrap(t, convert(Matrix{Int32}, indices))
 
 for n = 2:6
     @eval begin
         allocoutput{T<:Complex}(t::Bootstrap, X::AbstractArray{T,$n}, Y::AbstractArray{T,$n}=X) =
-            zeros(eltype(t.transform, X, Y), size(t.weights, 1), size(X, 2), size(Y, 2), $([:(size(X, $i)) for i = 3:n]...))
+            zeros(eltype(t.transform, X, Y), size(X, 2), size(Y, 2), size(t.indices, 2), $([:(size(X, $i)) for i = 3:n]...))
     end
 end
 
-#genweights(ntrials::Int, nbootstraps::Int) = rand(Multinomial(ntrials, ntrials), nbootstraps)'
-function genweights(ntrials::Int, nbootstraps::Int)
-    weights = zeros(Int32, ntrials, nbootstraps)
-    rnd = zeros(Int32, ntrials)
-    for iboot = 1:nbootstraps
-        @compat rand!(rnd, Int32(1):Int32(ntrials))
-        for itrial = 1:ntrials
-            @inbounds weights[rnd[itrial], iboot] += @compat Int32(1)
-        end
-    end
-    weights'
-end
 Bootstrap(transform::Statistic, ntrials::Int, nbootstraps::Int) =
-    Bootstrap(transform, genweights(ntrials, nbootstraps))
+    Bootstrap(transform, rand(Int32(1):Int32(ntrials), ntrials, nbootstraps))
 
-function copybootstraps!(out, X, weights, ibootstrap)
-    @inbounds for ichannel = 1:nchannels(out)
-        n = 1
-        for itrial = 1:size(weights, 1)
-            fin = n + weights[itrial, ibootstrap]
-            v = X[itrial, ichannel]
-            while n < fin
-                out[n, ichannel] = v
-                n += 1
-            end
+function copyindices!(out, X, indices, iindices)
+    @inbounds for j = 1:size(X, 2)
+        @simd for i = 1:size(indices, 1)
+            @inbounds out[i, j] = X[indices[i, iindices], j]
         end
     end
     out
 end
 
 allocwork{T<:Real}(t::Bootstrap, X::AbstractVecOrMat{Complex{T}}) =
-    (Array(Complex{T}, size(X, 1), size(X, 2)), t.weights', allocoutput(t.transform, X), allocwork(t.transform, X))
-function computestat!{R<:Statistic,T<:Real,V}(t::Bootstrap{R}, out::AbstractArray{V,3},
-                                              work::@compat(Tuple{Matrix{Complex{T}}, Matrix{Int32}, Matrix{V}, Any}),
-                                              X::AbstractVecOrMat{Complex{T}})
-    stat = t.transform
+    (Array(Complex{T}, size(X, 1), size(X, 2)), allocwork(t.transform, X))
+function bootstrap!{T<:Real,U,V}(t::Statistic, indices::Matrix{Int32}, out::AbstractArray{V,3},
+                                 Xbootstrap::Matrix{Complex{T}}, work::U, X::AbstractVecOrMat{Complex{T}})
     ntrials, nch = size(X)
-    Xbootstrap, weights, bsoutput, bswork = work
 
-    (size(X, 1) == size(Xbootstrap, 1) == size(weights, 1) &&
+    size(X, 1) == size(indices, 1) || throw(ArgumentError("number of bootstrap trials does not match number of trials"))
+    (size(X, 1) == size(Xbootstrap, 1) &&
      size(X, 2) == size(Xbootstrap, 2)) || throw(ArgumentError("invalid work object"))
-    chkinput(bsoutput, X)
 
-    for ibootstrap = 1:size(weights, 2)
-        copybootstraps!(Xbootstrap, X, weights, ibootstrap)
-        computestat!(stat, bsoutput, bswork, Xbootstrap)
-        out[ibootstrap, :, :] = bsoutput
+    for ibootstrap = 1:size(indices, 2)
+        copyindices!(Xbootstrap, X, indices, ibootstrap)
+        computestat!(t, sub(out, :, :, ibootstrap), work, Xbootstrap)
     end
-
     out
 end
+computestat!{R<:Statistic,T<:Real,V}(t::Bootstrap{R}, out::AbstractArray{V,3},
+                                     work::@compat(Tuple{Matrix{Complex{T}}, Any}),
+                                     X::AbstractVecOrMat{Complex{T}}) =
+    bootstrap!(t.transform, t.indices, out, work[1], work[2], X)
 
 allocwork{T<:Real}(t::Bootstrap, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
-    (Array(Complex{T}, size(X, 1), size(X, 2)), Array(Complex{T}, size(Y, 1), size(Y, 2)),
-     t.weights', allocoutput(t.transform, X, Y), allocwork(t.transform, X, Y))
-function computestat!{R<:Statistic,T<:Real,V}(t::JackknifeSurrogates{R}, out::AbstractArray{V,3},
-                                              work::@compat(Tuple{Matrix{Complex{T}}, Matrix{Complex{T}}, Matrix{Int32}, Matrix{V}, Any}),
-                                              X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
+    (Array(Complex{T}, size(X, 1), size(X, 2)), Array(Complex{T}, size(Y, 1), size(Y, 2)), allocwork(t.transform, X, Y))
+function bootstrap!{T<:Real,U,V}(t::Statistic, indices::Matrix{Int32}, out::AbstractArray{V,3},
+                                 Xbootstrap::Matrix{Complex{T}}, Ybootstrap::Matrix{Complex{T}}, work::U,
+                                 X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
     ntrials, nchX = size(X)
     nchY = size(Y, 2)
-    Xbootstrap, Ybootstrap, weights, bsoutput, bswork = work
 
-    (size(X, 1) == size(Xbootstrap, 1) == size(weights, 1) == size(out, 1) &&
-     size(Y, 1) == size(Ybootstrap, 1) == size(weights, 1) == size(out, 1) &&
+    size(X, 1) == size(t.indices, 1) || throw(ArgumentError("number of bootstrap trials does not match number of trials"))
+    (size(X, 1) == size(Xbootstrap, 1) &&
+     size(Y, 1) == size(Ybootstrap, 1) &&
      size(X, 2) == size(Xbootstrap, 2) &&
      size(Y, 2) == size(Ybootstrap, 2)) || throw(ArgumentError("invalid work object"))
-    chkinput(bsoutput, X, Y)
 
-    for ibootstrap = 1:size(weights, 2)
-        copybootstraps!(Xbootstrap, X, weights, ibootstrap)
-        copybootstraps!(Ybootstrap, Y, weights, ibootstrap)
-        computestat!(stat, bsoutput, bswork, Xbootstrap, Ybootstrap)
-        out[ibootstrap, :, :] = bsoutput
+    for ibootstrap = 1:size(t.indices, 2)
+        copyindices!(Xbootstrap, X, t.indices, ibootstrap)
+        copyindices!(Ybootstrap, Y, t.indices, ibootstrap)
+        computestat!(t, sub(out, :, :, ibootstrap), work, Xbootstrap, Ybootstrap)
     end
-
     out
 end
+computestat!{R<:Statistic,T<:Real,V}(t::Bootstrap{R}, out::AbstractArray{V,3},
+                                     work::@compat(Tuple{Matrix{Complex{T}}, Matrix{Complex{T}}, Any}),
+                                     X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
+    bootstrap!(t, out, work[1], work[2], work[3], X, Y)
 
-# Bootstrap of n-d arrays
-computestat!{T<:Real}(t::Bootstrap, out::AbstractArray, work, X::AbstractVecOrMat{Complex{T}}) = throw(ArgumentError("invalid work or output type"))
-function computestat!{T<:Real}(t::Bootstrap, out::AbstractArray, work, X::AbstractArray{Complex{T}})
-    !isempty(X) || error(ArgumentError("X is empty"))
+# Only unit normalize once
+computestat!{R<:NormalizedPairwiseStatistic{false},T<:Real,V}(t::Bootstrap{R}, out::AbstractArray{V,3},
+                                                              work::@compat(Tuple{Matrix{Complex{T}}, Any}),
+                                                              X::AbstractVecOrMat{Complex{T}}) =
+    bootstrap!(normalized(t.transform), t.indices, out, work[1], work[2][2], unitnormalize!(work[2][1], X))
+computestat!{R<:NormalizedPairwiseStatistic{false},T<:Real,V}(t::Bootstrap{R}, out::AbstractArray{V,3},
+                                                              work::@compat(Tuple{Matrix{Complex{T}}, Matrix{Complex{T}}, Any}),
+                                                              X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
+    bootstrap!(normalized(t.transform), t.indices, out, work[1], work[2], work[3][3],
+               unitnormalize!(work[3][1], X), unitnormalize!(work[3][2], Y))
+#
+# Permutations
+#
+
+immutable Permutation{S} <: Statistic
+    transform::S
+    indices::Matrix{Int32}
+end
+function Permutation(transform::Statistic, ntrials::Int, nperm::Int)
+    indices = Array(Int32, ntrials, nperm)
+    v = [1:ntrials;]
+    for iperm = 1:nperm
+        indices[:, iperm] = shuffle!(v)
+    end
+    Permutation(transform, indices)
+end
+for n = 2:6
+    @eval begin
+        allocoutput{T<:Complex}(t::Permutation, X::AbstractArray{T,$n}, Y::AbstractArray{T,$n}=X) =
+            zeros(eltype(t.transform, X, Y), size(X, 2), size(Y, 2), size(t.indices, 2), $([:(size(X, $i)) for i = 3:n]...))
+    end
+end
+
+allocwork{T<:Real}(t::Permutation, X::AbstractVecOrMat{Complex{T}}) =
+    (Array(Complex{T}, size(X, 1), size(X, 2)), allocwork(t.transform, X, X))
+# Separate allocwork method here to avoid allocating a second array for normalizing X
+allocwork{T<:Real,R<:NormalizedPairwiseStatistic{false}}(t::Permutation{R}, X::AbstractVecOrMat{Complex{T}}) =
+    (Array(Complex{T}, size(X, 1), size(X, 2)), Array(Complex{T}, size(X, 1), size(X, 2)), allocwork(normalized(t.transform), X, X))
+function permutation!{U,T<:Real,V}(t::Statistic, indices::Matrix{Int32}, out::AbstractArray{U,3}, perm::Array{Complex{T},2}, work::V,
+                                   X::AbstractVecOrMat{Complex{T}})
+    size(X, 1) == size(indices, 1) || throw(ArgumentError("number of permutation trials does not match number of trials"))
+    (size(X, 1) == size(perm, 1) &&
+     size(X, 2) == size(perm, 2)) || throw(ArgumentError("invalid work object"))
+
+    for iperm = 1:size(indices, 2)
+        copyindices!(perm, X, indices, iperm)
+        computestat!(t, sub(out, :, :, iperm), work, perm, X)
+    end
+    out
+end
+computestat!{R<:Statistic,T<:Real,V}(t::Permutation{R}, out::AbstractArray{V,3},
+                                     work::@compat(Tuple{Matrix{Complex{T}}, Any}),
+                                     X::AbstractVecOrMat{Complex{T}}) =
+    permutation!(t.transform, t.indices, out, work[1], work[2], X)
+
+allocwork{T<:Real}(t::Permutation, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
+    (Array(Complex{T}, size(X, 1), size(X, 2)), allocwork(t.transform, X, Y))
+function computestat!{U,T<:Real,V}(t::Statistic, indices::Matrix{Int32}, out::AbstractArray{U,3}, perm::Array{Complex{T},2}, work::V,
+                                   X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
+    size(X, 1) == size(indices, 1) || throw(ArgumentError("number of bootstrap trials does not match number of trials"))
+    (size(X, 1) == size(perm, 1) &&
+     size(X, 2) == size(perm, 2)) || throw(ArgumentError("invalid work object"))
+
+    for iperm = 1:size(indices, 2)
+        copyindices!(perm, X, indices, iperm)
+        computestat!(t, sub(out, :, :, iperm), work, perm, Y)
+    end
+    out
+end
+computestat!{R<:Statistic,T<:Real,V}(t::Permutation{R}, out::AbstractArray{V,3},
+                                     work::@compat(Tuple{Matrix{Complex{T}}, Any}),
+                                     X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
+    permutation!(t.transform, t.indices, out, work[1], work[2], X, Y)
+
+# Only unit normalize once
+computestat!{R<:NormalizedPairwiseStatistic{false},T<:Real,V}(t::Permutation{R}, out::AbstractArray{V,3},
+                                                              work::@compat(Tuple{Matrix{Complex{T}}, Matrix{Complex{T}}, Any}),
+                                                              X::AbstractVecOrMat{Complex{T}}) =
+    permutation!(normalized(t.transform), t.indices, out, work[2], work[3], unitnormalize!(work[1], X))
+computestat!{R<:NormalizedPairwiseStatistic{false},T<:Real,V}(t::Permutation{R}, out::AbstractArray{V,3},
+                                                              work::@compat(Tuple{Matrix{Complex{T}}, Any}),
+                                                              X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
+    permutation!(normalized(t.transform), t.indices, out, work[1], work[2][3],
+               unitnormalize!(work[2][1], X), unitnormalize!(work[2][2], Y))
+
+# Bootstrap and permutations of n-d arrays
+computestat!{T<:Real}(t::Union(Bootstrap, Permutation), out::AbstractArray, work, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}=Y) =
+    throw(ArgumentError("invalid work type $(typeof(work)) or output type $(typeof(out))"))
+function computestat!{T<:Real}(t::Union(Bootstrap, Permutation), out::AbstractArray, work, X::AbstractArray{Complex{T}})
     for i = 1:Base.trailingsize(X, 3)
         computestat!(t, sub(out, :, :, :, i), work, sub(X, :, :, i))
     end
     out
 end
-computestat!{T<:Real}(t::Bootstrap, out::AbstractArray, work, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) = throw(ArgumentError("invalid work or output type"))
-function computestat!{T<:Real}(t::Bootstrap, out::AbstractArray, work, X::AbstractArray{Complex{T}}, Y::AbstractArray{Complex{T}})
-    !isempty(X) || error(ArgumentError("X is empty"))
+function computestat!{T<:Real}(t::Union(Bootstrap, Permutation), out::AbstractArray, work, X::AbstractArray{Complex{T}}, Y::AbstractArray{Complex{T}})
     for i = 1:Base.trailingsize(X, 3)
         computestat!(t, sub(out, :, :, :, i), work, sub(X, :, :, i), sub(Y, :, :, i))
     end
@@ -718,3 +818,5 @@ include("transforms/pli.jl")
 include("transforms/jammalamadaka.jl")
 include("transforms/juppmardia.jl")
 include("transforms/modulationindex.jl")
+include("transforms/uniformscores.jl")
+# include("transforms/vmconcentration.jl")

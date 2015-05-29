@@ -18,7 +18,7 @@ computestat!{T<:Real}(::PowerSpectrum, out::AbstractMatrix{T}, ::Nothing,
 # Cross spectrum
 #
 
-immutable CrossSpectrum <: ComplexPairwiseStatistic; end
+immutable CrossSpectrum <: PairwiseStatistic; end
 
 # Single input matrix
 allocwork{T<:Complex}(::CrossSpectrum, X::AbstractVecOrMat{T}) = nothing
@@ -31,3 +31,10 @@ allocwork{T<:Complex}(::CrossSpectrum, X::AbstractVecOrMat{T}, Y::AbstractVecOrM
 computestat!{T<:Complex}(::CrossSpectrum, out::AbstractMatrix{T}, ::Nothing,
                          X::AbstractVecOrMat{T}, Y::AbstractVecOrMat{T}) =
     scale!(Ac_mul_B!(out, X, Y), 1/ntrials(X, 2))
+
+accumulator{T<:Real}(::Type{CrossSpectrum}, ::Type{T}) = zero(Complex{T})
+@inline accumulate{T<:Real}(::Type{CrossSpectrum}, x::Complex{T},
+                            v1::Complex{T}, v2::Complex{T}) = (x + conj(v1)*v2)
+@inline accumulate{T<:Real}(::Type{CrossSpectrum}, x::Complex{T},
+                            v1::Complex{T}, v2::Complex{T}, weight::Real) = (x + conj(v1)*v2*weight)
+finish(::Type{CrossSpectrum}, x::Complex, n::Int) = x/n
