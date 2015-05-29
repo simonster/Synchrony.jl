@@ -52,6 +52,8 @@ surrogateval(::Coherency, v) = v
 # Single input matrix
 allocwork{T<:Real}(t::Union(JackknifeSurrogates{Coherency}, JackknifeSurrogates{Coherence}),
                    X::AbstractVecOrMat{Complex{T}}) = allocwork(t.transform, X)
+accumulator_array(::JackknifeSurrogates{Coherency}, work::Nothing, out::AbstractMatrix) = out
+accumulator_array(::JackknifeSurrogates{Coherence}, work::AbstractMatrix, out::AbstractMatrix) = work
 function computestat!{T<:Real}(t::Union(JackknifeSurrogates{Coherency}, JackknifeSurrogates{Coherence}),
                                out::JackknifeSurrogatesOutput,
                                work::Union(Matrix{Complex{T}}, Nothing),
@@ -59,7 +61,7 @@ function computestat!{T<:Real}(t::Union(JackknifeSurrogates{Coherency}, Jackknif
     stat = t.transform
     trueval = out.trueval
     surrogates = out.surrogates
-    XXc::Matrix{Complex{T}} = isa(t, JackknifeSurrogates{Coherence}) ? work : trueval
+    XXc = accumulator_array(t, work, out.trueval)
     chkinput(trueval, X)
 
     Ac_mul_A!(XXc, X)
@@ -104,7 +106,7 @@ function computestat!{T<:Real,V}(t::Union(JackknifeSurrogates{Coherency}, Jackkn
     stat = t.transform
     trueval = out.trueval
     surrogates = out.surrogates
-    XYc::Matrix{Complex{T}} = isa(t, JackknifeSurrogates{Coherence}) ? work[1] : trueval
+    XYc = accumulator_array(t, work[1], out.trueval)
     chkinput(trueval, X, Y)
 
     Ac_mul_B!(XYc, X, Y)
