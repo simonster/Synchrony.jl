@@ -1,4 +1,5 @@
-export computestat, computestat!, PowerSpectrum, CrossSpectrum, Coherency,
+export computestat, computestat!, computestat_parallel, computestat_parallel!,
+       PowerSpectrum, CrossSpectrum, Coherency,
        Coherence, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, WPLI,
        WPLI2Debiased, JammalamadakaR, JuppMardiaR,
        HurtadoModulationIndex, UniformScores, JackknifeSurrogates, Jackknife,
@@ -123,6 +124,10 @@ computestat(t::Statistic, X::AbstractArray) =
     computestat!(t, allocoutput(t, X), allocwork(t, X), X)
 computestat(t::Statistic, X::AbstractArray, Y::AbstractArray) =
     computestat!(t, allocoutput(t, X, Y), allocwork(t, X, Y), X, Y)
+computestat_parallel(t::Statistic, X::AbstractArray) =
+    computestat_parallel!(t, allocoutput(t, X), allocwork(t, X), X)
+computestat_parallel(t::Statistic, X::AbstractArray, Y::AbstractArray) =
+    computestat_parallel!(t, allocoutput(t, X, Y), allocwork(t, X, Y), X, Y)
 
 allocwork{T<:Real}(t::Statistic, X::AbstractVecOrMat{Complex{T}}) =
     error("allocwork($(typeof(t)), X) not defined")
@@ -142,32 +147,81 @@ computestat!{T<:Complex}(t::Statistic, out::AbstractArray, work, X::AbstractVecO
 computestat!{T<:Complex}(t::Statistic, out::AbstractArray, work, X::AbstractVecOrMat{T}, Y::AbstractVecOrMat{T}) =
     error("computestat! not defined for $(typeof(t)) with two input matrices, or incorrect work $(typeof(work)) or output $(typeof(out)) given")
 
-# Generate an unsafe_view of the output for the ith independent input
-@generated function output_view(t::Statistic, out::AbstractArray, i::Int)
-    :(unsafe_view(out, $(fill(:(:), outputdims(t))...), i))
-end
-
-function computestat!{T<:Complex,V}(t::Statistic, out::AbstractArray, work::V, X::AbstractArray{T})
+function checknd(t::Statistic, out::AbstractArray, X::AbstractArray)
     isempty(X) && throw(ArgumentError("X is empty"))
     trail = Base.trailingsize(X, 3)
     Base.trailingsize(out, outputdims(typeof(t))+1) == trail || throw(DimensionMismatch("output size mismatch"))
+    trail
+end
 
-    for i = 1:trail
+function checknd(t::Statistic, out::AbstractArray, X::AbstractArray, Y::AbstractArray)
+    (isempty(X) || isempty(Y)) && throw(ArgumentError("X or Y is empty"))
+    trail = Base.trailingsize(X, 3)
+    Base.trailingsize(Y, 3) == trail || throw(DimensionMismatch("X and Y must have same trailing dimensions"))
+    Base.trailingsize(out, outputdims(typeof(t))+1) == trail || throw(DimensionMismatch("output size mismatch"))
+    trail
+end
+
+# Generate an unsafe_view of the output for the ith independent input
+@generated function output_view(t::Statistic, out::AbstractArray, i::Union(Int, UnitRange{Int}))
+    :(unsafe_view(out, $(fill(:(:), outputdims(t))...), i))
+end
+
+# nd computestat!
+function computestat!{T<:Complex,V}(t::Statistic, out::AbstractArray, work::V, X::AbstractArray{T})
+    for i = 1:checknd(t, out, X)
         computestat!(t, output_view(t, out, i), work, unsafe_view(X, :, :, i))
     end
     out
 end
 
 function computestat!{T<:Complex,V}(t::Statistic, out::AbstractArray, work::V, X::AbstractArray{T}, Y::AbstractArray{T})
-    (isempty(X) || isempty(Y)) && throw(ArgumentError("X or Y is empty"))
-    trail = Base.trailingsize(X, 3)
-    Base.trailingsize(Y, 3) == trail || throw(DimensionMismatch("X and Y must have same trailing dimensions"))
-    Base.trailingsize(out, outputdims(typeof(t))+1) == trail || throw(DimensionMismatch("output size mismatch"))
-
-    for i = 1:trail
-        computestat!(t, output_view(t, out, i), work, unsafe_view(X, :, :, i))
+    for i = 1:checknd(t, out, X, Y)
+        computestat!(t, output_view(t, out, i), work, unsafe_view(X, :, :, i), unsafe_view(Y, :, :, i))
     end
     out
+end
+
+# parallel nd computestat!
+function chunkranges(x::Int, n::Int)
+    parts = Array(UnitRange{Int}, n)
+    chunklen = div(x, n)
+    curind = 1
+    for i = 1:n
+        chunklen = div(x - curind + 1, n-i+1)
+        parts[i] = curind:curind+chunklen-1
+        curind = curind+chunklen
+    end
+    parts
+end
+
+function computestat_parallel_complete!(t, out, refs, ranges)
+    for i = 1:length(refs)
+        res = fetch(refs[i])
+        isa(res, Exception) && rethrow(res)
+        copy!(output_view(t, out, ranges[i]), res)
+    end
+    out
+end
+
+function computestat_parallel!{T<:Complex,V}(t::Statistic, out::AbstractArray, work::V, X::AbstractArray{T})
+    np = max(nprocs()-1, 1)
+    p = np == 1 ? (1:1) : 2:np+1
+    ranges = chunkranges(checknd(t, out, X), np)
+    n = length(ranges)
+
+    refs = [remotecall(p[i], computestat, t, X[:, :, ranges[i]]) for i = 1:length(ranges)]
+    computestat_parallel_complete!(t, out, refs, ranges)
+end
+
+function computestat_parallel!{T<:Complex,V}(t::Statistic, out::AbstractArray, work::V, X::AbstractArray{T}, Y::AbstractArray{T})
+    np = max(nprocs()-1, 1)
+    p = np == 1 ? (1:1) : 2:np+1
+    ranges = chunkranges(checknd(t, out, X, Y), np)
+    n = length(ranges)
+
+    refs = [remotecall(p[i], computestat, t, X[:, :, ranges[i]], Y[:, :, ranges[i]]) for i = 1:length(ranges)]
+    computestat_parallel_complete!(t, out, refs, ranges)
 end
 
 #

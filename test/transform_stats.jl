@@ -226,7 +226,7 @@ end
 # Test nd
 offsets = reshape(rand(10)*2pi, 1, 10)
 snr = 5*reshape(rand(10), 1, 10)
-inputs = rand(100, 10, 2, 2).*exp(im*(offsets .+ randn(100, 10, 2, 2)./snr))
+inputs = rand(100, 10, 1, 7).*exp(im*(offsets .+ randn(100, 10, 1, 7)./snr))
 
 ngroups = 10
 groups = Array(Vector{Tuple{Int, Int}}, ngroups)
@@ -247,11 +247,13 @@ for stat in [Coherence, Coherency, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, W
     # True statistic
     tv = mapslices(x->computestat(stat(), x), inputs, (1, 2))
     @test_approx_eq computestat(stat(), inputs) tv
+    @test_approx_eq computestat_parallel(stat(), inputs) tv
 
     # GroupMean
     gmstat = GroupMean(stat(), size(inputs, 2), groups)
     tgm = mapslices(x->computestat(gmstat, x), inputs, (1, 2))
     @test_approx_eq computestat(gmstat, inputs) tgm
+    @test_approx_eq computestat_parallel(gmstat, inputs) tgm
 
     # JackknifeSurrogates
     jns = computestat(JackknifeSurrogates(stat()), inputs)
@@ -276,6 +278,7 @@ for stat in [Coherence, Coherency, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, W
             bstrue[:, :, :, i] = computestat(bs, inputs[:, :, i])
         end
         @test_approx_eq computestat(bs, inputs) bstrue
+        @test_approx_eq computestat_parallel(bs, inputs) bstrue
 
         bs = t(gmstat, size(inputs, 1), nbootstraps)
         bstrue = zeros(eltype(tv), length(groups), nbootstraps, size(inputs)[3:end]...)
@@ -283,6 +286,7 @@ for stat in [Coherence, Coherency, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, W
             bstrue[:, :, i] = computestat(bs, inputs[:, :, i])
         end
         @test_approx_eq computestat(bs, inputs) bstrue
+        @test_approx_eq computestat_parallel(bs, inputs) bstrue
     end
 end
 
