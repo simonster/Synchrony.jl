@@ -83,10 +83,10 @@ end
 #
 
 # Single input matrix
-allocwork{T<:Real}(t::Union(JackknifeSurrogates{MeanPhaseDiff{true}}, JackknifeSurrogates{PPC{true}}, JackknifeSurrogates{PLV{true}}),
+allocwork{T<:Real}(t::Union(AbstractJackknifeSurrogates{MeanPhaseDiff{true}}, AbstractJackknifeSurrogates{PPC{true}}, AbstractJackknifeSurrogates{PLV{true}}),
                    X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}=X) =
     Array(Complex{T}, nchannels(X), nchannels(Y))
-function computestat!{S<:Union(MeanPhaseDiff{true}, PLV{true}, PPC{true}), T<:Real}(t::JackknifeSurrogates{S},
+function computestat!{S<:Union(MeanPhaseDiff{true}, PLV{true}, PPC{true}), T<:Real}(t::AbstractJackknifeSurrogates{S},
                                                                                     out::JackknifeSurrogatesOutput,
                                                                                     work::Matrix{Complex{T}},
                                                                                     X::AbstractVecOrMat{Complex{T}})
@@ -94,6 +94,8 @@ function computestat!{S<:Union(MeanPhaseDiff{true}, PLV{true}, PPC{true}), T<:Re
     surrogates = out.surrogates
 
     chkinput(trueval, X)
+    ntrials(X) % jnn(t) == 0 || throw(DimensionMismatch("ntrials not evenly divisible by $(jnn(t))"))
+    size(out.surrogates, 1) == div(ntrials(X), jnn(t)) || throw(DimensionMismatch("invalid output size"))
 
     Ac_mul_A!(work, X)
 
@@ -103,11 +105,15 @@ function computestat!{S<:Union(MeanPhaseDiff{true}, PLV{true}, PPC{true}), T<:Re
     @inbounds for k = 1:size(X, 2)
         for j = 1:k-1
             x = work[j, k]
-            for i = 1:size(X, 1)
-                surrogates[i, j, k] = finish(S, x - conj(X[i, j])*X[i, k], n-1)
+            for i = 1:size(surrogates, 1)
+                v = x
+                for idel = (i-1)*jnn(t)+1:i*jnn(t)
+                    v -= conj(X[idel, j])*X[idel, k]
+                end
+                surrogates[i, j, k] = finish(S, v, n-jnn(t))
             end
         end
-        for i = 1:size(X, 1)
+        for i = 1:size(surrogates, 1)
             surrogates[i, k, k] = 1
         end
     end
@@ -116,7 +122,7 @@ function computestat!{S<:Union(MeanPhaseDiff{true}, PLV{true}, PPC{true}), T<:Re
 end
 
 # Two input matrices
-function computestat!{S<:Union(MeanPhaseDiff{true}, PLV{true}, PPC{true}), T<:Real}(t::JackknifeSurrogates{S},
+function computestat!{S<:Union(MeanPhaseDiff{true}, PLV{true}, PPC{true}), T<:Real}(t::AbstractJackknifeSurrogates{S},
                                                                                     out::JackknifeSurrogatesOutput,
                                                                                     work::Matrix{Complex{T}},
                                                                                     X::AbstractVecOrMat{Complex{T}},
@@ -125,6 +131,8 @@ function computestat!{S<:Union(MeanPhaseDiff{true}, PLV{true}, PPC{true}), T<:Re
     surrogates = out.surrogates
 
     chkinput(trueval, X, Y)
+    ntrials(X) % jnn(t) == 0 || throw(DimensionMismatch("ntrials not evenly divisible by $(jnn(t))"))
+    size(out.surrogates, 1) == div(ntrials(X), jnn(t)) || throw(DimensionMismatch("invalid output size"))
 
     Ac_mul_B!(work, X, Y)
 
@@ -133,8 +141,12 @@ function computestat!{S<:Union(MeanPhaseDiff{true}, PLV{true}, PPC{true}), T<:Re
 
     @inbounds for k = 1:size(Y, 2), j = 1:size(X, 2)
         x = work[j, k]
-        for i = 1:size(X, 1)
-            surrogates[i, j, k] = finish(S, x - conj(X[i, j])*Y[i, k], n-1)
+        for i = 1:size(surrogates, 1)
+            v = x
+            for idel = (i-1)*jnn(t)+1:i*jnn(t)
+                v -= conj(X[idel, j])*Y[idel, k]
+            end
+            surrogates[i, j, k] = finish(S, v, n-jnn(t))
         end
     end
 

@@ -50,11 +50,11 @@ surrogateval(::Coherence, v) = abs(v)
 surrogateval(::Coherency, v) = v
 
 # Single input matrix
-allocwork{T<:Real}(t::Union(JackknifeSurrogates{Coherency}, JackknifeSurrogates{Coherence}),
+allocwork{T<:Real}(t::Union(AbstractJackknifeSurrogates{Coherency}, AbstractJackknifeSurrogates{Coherence}),
                    X::AbstractVecOrMat{Complex{T}}) = allocwork(t.transform, X)
-accumulator_array(::JackknifeSurrogates{Coherency}, work::Nothing, out::AbstractMatrix) = out
-accumulator_array(::JackknifeSurrogates{Coherence}, work::AbstractMatrix, out::AbstractMatrix) = work
-function computestat!{T<:Real}(t::Union(JackknifeSurrogates{Coherency}, JackknifeSurrogates{Coherence}),
+accumulator_array(::AbstractJackknifeSurrogates{Coherency}, work::Nothing, out::AbstractMatrix) = out
+accumulator_array(::AbstractJackknifeSurrogates{Coherence}, work::AbstractMatrix, out::AbstractMatrix) = work
+function computestat!{T<:Real}(t::Union(AbstractJackknifeSurrogates{Coherency}, AbstractJackknifeSurrogates{Coherence}),
                                out::JackknifeSurrogatesOutput,
                                work::Union(Matrix{Complex{T}}, Nothing),
                                X::AbstractVecOrMat{Complex{T}})
@@ -63,6 +63,8 @@ function computestat!{T<:Real}(t::Union(JackknifeSurrogates{Coherency}, Jackknif
     surrogates = out.surrogates
     XXc = accumulator_array(t, work, out.trueval)
     chkinput(trueval, X)
+    ntrials(X) % jnn(t) == 0 || throw(DimensionMismatch("ntrials not evenly divisible by $(jnn(t))"))
+    size(out.surrogates, 1) == div(ntrials(X), jnn(t)) || throw(DimensionMismatch("invalid output size"))
 
     Ac_mul_A!(XXc, X)
 
@@ -71,19 +73,26 @@ function computestat!{T<:Real}(t::Union(JackknifeSurrogates{Coherency}, Jackknif
         kssq = real(XXc[k, k])
         for j = 1:k-1
             jssq = real(XXc[j, j])
-            for i = 1:size(X, 1)
-                v = XXc[j, k] - conj(X[i, j])*X[i, k]
+            for i = 1:size(surrogates, 1)
+                v = XXc[j, k]
+                jssqdel = jssq
+                kssqdel = kssq
+                for idel = (i-1)*jnn(t)+1:i*jnn(t)
+                    v -= conj(X[idel, j])*X[idel, k]
+                    jssqdel -= abs2(X[idel, j])
+                    kssqdel -= abs2(X[idel, k])
+                end
                 # XXX maybe precompute sqrt for each channel and trial?
-                surrogates[i, j, k] = surrogateval(t.transform, v)/sqrt((jssq - abs2(X[i, j]))*(kssq - abs2(X[i, k])))
+                surrogates[i, j, k] = surrogateval(t.transform, v)/sqrt(jssqdel*kssqdel)
             end
         end
-        for i = 1:size(X, 1)
+        for i = 1:size(surrogates, 1)
             surrogates[i, k, k] = 1
         end
     end
 
     # Finish true value
-    if isa(t, JackknifeSurrogates{Coherence})
+    if isa(t.transform, Coherence)
         cov2coh!(trueval, XXc, Base.AbsFun())
     else
         cov2coh!(trueval, XXc, Base.IdFun())
@@ -108,6 +117,8 @@ function computestat!{T<:Real,V}(t::Union(JackknifeSurrogates{Coherency}, Jackkn
     surrogates = out.surrogates
     XYc = accumulator_array(t, work[1], out.trueval)
     chkinput(trueval, X, Y)
+    ntrials(X) % jnn(t) == 0 || throw(DimensionMismatch("ntrials not evenly divisible by $(jnn(t))"))
+    size(out.surrogates, 1) == div(ntrials(X), jnn(t)) || throw(DimensionMismatch("invalid output size"))
 
     Ac_mul_B!(XYc, X, Y)
 
@@ -124,10 +135,17 @@ function computestat!{T<:Real,V}(t::Union(JackknifeSurrogates{Coherency}, Jackkn
                 jssq += abs2(X[i, j])
             end
 
-            for i = 1:size(X, 1)
-                v = XYc[j, k] - conj(X[i, j])*Y[i, k]
+            for i = 1:div(size(X, 1), jnn(t))
+                v = XYc[j, k]
+                jssqdel = jssq
+                kssqdel = kssq
+                for idel = (i-1)*jnn(t)+1:i*jnn(t)
+                    v -= conj(X[idel, j])*Y[idel, k]
+                    jssqdel -= abs2(X[idel, j])
+                    kssqdel -= abs2(Y[idel, k])
+                end
                 # XXX maybe precompute sqrt for each channel and trial?
-                surrogates[i, j, k] = surrogateval(t.transform, v)/sqrt((jssq - abs2(X[i, j]))*(kssq - abs2(Y[i, k])))
+                surrogates[i, j, k] = surrogateval(t.transform, v)/sqrt(jssqdel*kssqdel)
             end
         end
     end

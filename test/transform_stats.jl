@@ -144,7 +144,8 @@ groups = [fill(1, 12); fill(2, 12); fill(3, 13); fill(4, 12)]
 v = computestat(UniformScores(groups), Complex128[rand(length(d)).*cis(d/180*pi) zeros(length(d))])
 @test_approx_eq_eps v[1, 2] 12.81 0.01
 
-csinput = [csinput expi]
+csinput = complex(randn(25, 3), randn(25, 3))
+nmulti = 5
 
 # Generate bootstrap weights
 bsindices = rand(1:size(csinput, 1), size(csinput, 1), 10)
@@ -152,27 +153,27 @@ permindices = Permutation(Coherence(), size(csinput, 1), 10).indices
 groups = Vector{Tuple{Int,Int}}[[(1, 2)], [(3, 2)], [(1, 2), (2, 3)]]
 
 # Single input tests of nested stats
-for stat in [Coherence, Coherency, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, WPLI, WPLI2Debiased, JammalamadakaR, JuppMardiaR]
+for stat in [Coherence(), Coherency(), MeanPhaseDiff(), PLV(), PPC(), PLI(), PLI2Unbiased(), WPLI(), WPLI2Debiased(), JammalamadakaR(), JuppMardiaR()]
     # Test GroupMean
-    trueval = computestat(stat(), csinput)
-    gmstat = GroupMean(stat(), size(csinput, 2), groups)
+    trueval = computestat(stat, csinput)
+    gmstat = GroupMean(stat, size(csinput, 2), groups)
     gm = computestat(gmstat, csinput)
     @test_approx_eq gm [trueval[1, 2], trueval[2, 3], (trueval[1, 2] + trueval[2, 3])/2]
 
     # Test JackknifeSurrogates
     estimates = zeros(eltype(trueval), size(csinput, 1), size(csinput, 2), size(csinput, 2))
     for i = 1:size(csinput, 1)
-        estimates[i, :, :] = computestat(stat(), csinput[[1:i-1; i+1:size(csinput, 1)], :])
+        estimates[i, :, :] = computestat(stat, csinput[[1:i-1; i+1:size(csinput, 1)], :])
     end
     jnvar = squeeze(var(estimates, 1, corrected=false), 1)*(size(csinput, 1)-1)
-    jn = computestat(JackknifeSurrogates(stat()), csinput)
+    jn = computestat(JackknifeSurrogates(stat), csinput)
     @test_approx_eq jn.trueval trueval
     @test_approx_eq_eps jackknife_bias(jn) (size(csinput, 1)-1)*(squeeze(mean(estimates, 1), 1) - trueval) sqrt(eps())
     @test_approx_eq jackknife_var(jn) jnvar
 
     # Test Jackknife
-    a = Jackknife(stat())
-    jn = computestat(Jackknife(stat()), csinput)
+    a = Jackknife(stat)
+    jn = computestat(Jackknife(stat), csinput)
     @test_approx_eq jn.trueval trueval
     @test_approx_eq jn.var jnvar
 
@@ -182,32 +183,23 @@ for stat in [Coherence, Coherency, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, W
     est2 = mean([estimates[:, 1, 2] estimates[:, 2, 3]], 2)
     @test_approx_eq jn.var [jnvar[1, 2], jnvar[2, 3], var(est2, corrected=false)*(size(csinput, 1)-1)]
 
-    if stat == JammalamadakaR || stat == JuppMardiaR
-        # The first channel is constant, which leads to a correlation
-        # coefficient of NaN with itself. It isn't really worth doing
-        # the extra work to set this to NaN instead of 1.0 if given a
-        # single input.
-        estimates[:, 1, 1] = NaN
-        trueval[1, 1] = NaN
+    # Test MultiJackknifeSurrogates
+    estimates = zeros(eltype(trueval), div(size(csinput, 1), nmulti), size(csinput, 2), size(csinput, 2))
+    for i = 1:size(estimates, 1)
+        estimates[i, :, :] = computestat(stat, csinput[[1:(i-1)*nmulti; i*nmulti+1:size(csinput, 1)], :])
     end
-
-    for k = 1:(size(csinput, 2)-1), j = (k+1):size(csinput, 2)
-        for i = 1:size(csinput, 1)
-            estimates[i, j, k] = conj(estimates[i, k, j])
-        end
-        trueval[j, k] = conj(trueval[k, j])
-    end
-    jn = computestat(JackknifeSurrogates(stat()), csinput, csinput)
+    jnvar = squeeze(var(estimates, 1, corrected=false), 1)*(size(estimates, 1)-1)
+    jn = computestat(MultiJackknifeSurrogates(stat, nmulti), csinput)
     @test_approx_eq jn.trueval trueval
-    @test_approx_eq_eps jackknife_bias(jn) (size(csinput, 1)-1)*(squeeze(mean(estimates, 1), 1) - trueval) sqrt(eps())
-    @test_approx_eq jackknife_var(jn) squeeze(sum(abs2(estimates .- mean(estimates, 1)), 1), 1)*(size(csinput, 1)-1)/size(csinput, 1)
+    @test_approx_eq_eps jackknife_bias(jn) (size(estimates, 1)-1)*(squeeze(mean(estimates, 1), 1) - trueval) sqrt(eps())
+    @test_approx_eq jackknife_var(jn) jnvar
 
     # Test Bootstrap
     estimates = zeros(eltype(trueval), size(csinput, 2), size(csinput, 2), size(bsindices, 2))
     for i = 1:size(bsindices, 2)
-        estimates[:, :, i] = computestat(stat(), csinput[bsindices[:, i], :])
+        estimates[:, :, i] = computestat(stat, csinput[bsindices[:, i], :])
     end
-    bs = computestat(Bootstrap(stat(), bsindices), csinput)
+    bs = computestat(Bootstrap(stat, bsindices), csinput)
     @test_approx_eq bs estimates
 
     # Test Bootstrap{GroupMean}
@@ -217,9 +209,9 @@ for stat in [Coherence, Coherency, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, W
     # Test Permutation
     estimates = zeros(eltype(trueval), size(csinput, 2), size(csinput, 2), size(permindices, 2))
     for i = 1:size(permindices, 2)
-        estimates[:, :, i] = computestat(stat(), csinput[permindices[:, i], :], csinput)
+        estimates[:, :, i] = computestat(stat, csinput[permindices[:, i], :], csinput)
     end
-    perms = computestat(Permutation(stat(), permindices), csinput)
+    perms = computestat(Permutation(stat, permindices), csinput)
     @test_approx_eq perms estimates
 
     # Test Permutation{GroupMean}
@@ -228,27 +220,27 @@ for stat in [Coherence, Coherency, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, W
 end
 
 # Two input tests of nested stats
-for stat in [Coherence, Coherency, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, WPLI, WPLI2Debiased, JammalamadakaR, JuppMardiaR, HurtadoModulationIndex]
+for stat in [Coherence(), Coherency(), MeanPhaseDiff(), PLV(), PPC(), PLI(), PLI2Unbiased(), WPLI(), WPLI2Debiased(), JammalamadakaR(), JuppMardiaR(), HurtadoModulationIndex(5)]
     # Test GroupMean
-    trueval = computestat(stat(), csinput, csinput)
-    gmstat = GroupMean(stat(), size(csinput, 2), groups)
+    trueval = computestat(stat, csinput, csinput)
+    gmstat = GroupMean(stat, size(csinput, 2), groups)
     gm = computestat(gmstat, csinput, csinput)
     @test_approx_eq gm [trueval[1, 2], trueval[2, 3], (trueval[1, 2] + trueval[2, 3])/2]
 
     # Test JackknifeSurrogates
     estimates = zeros(eltype(trueval), size(csinput, 1), size(csinput, 2), size(csinput, 2))
     for i = 1:size(csinput, 1)
-        estimates[i, :, :] = computestat(stat(), csinput[[1:i-1; i+1:size(csinput, 1)], :], csinput[[1:i-1; i+1:size(csinput, 1)], :])
+        estimates[i, :, :] = computestat(stat, csinput[[1:i-1; i+1:size(csinput, 1)], :], csinput[[1:i-1; i+1:size(csinput, 1)], :])
     end
     jnvar = squeeze(var(estimates, 1, corrected=false), 1)*(size(csinput, 1)-1)
-    jn = computestat(JackknifeSurrogates(stat()), csinput, csinput)
+    jn = computestat(JackknifeSurrogates(stat), csinput, csinput)
     @test_approx_eq jn.trueval trueval
     @test_approx_eq_eps jackknife_bias(jn) (size(csinput, 1)-1)*(squeeze(mean(estimates, 1), 1) - trueval) sqrt(eps())
     @test_approx_eq jackknife_var(jn) jnvar
 
     # Test Jackknife
-    a = Jackknife(stat())
-    jn = computestat(Jackknife(stat()), csinput, csinput)
+    a = Jackknife(stat)
+    jn = computestat(Jackknife(stat), csinput, csinput)
     @test_approx_eq jn.trueval trueval
     @test_approx_eq jn.var jnvar
 
@@ -258,12 +250,23 @@ for stat in [Coherence, Coherency, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, W
     est2 = mean([estimates[:, 1, 2] estimates[:, 2, 3]], 2)
     @test_approx_eq jn.var [jnvar[1, 2], jnvar[2, 3], var(est2, corrected=false)*(size(csinput, 1)-1)]
 
+    # Test MultiJackknifeSurrogates
+    estimates = zeros(eltype(trueval), div(size(csinput, 1), nmulti), size(csinput, 2), size(csinput, 2))
+    for i = 1:size(estimates, 1)
+        estimates[i, :, :] = computestat(stat, csinput[[1:(i-1)*nmulti; i*nmulti+1:size(csinput, 1)], :], csinput[[1:(i-1)*nmulti; i*nmulti+1:size(csinput, 1)], :])
+    end
+    jnvar = squeeze(var(estimates, 1, corrected=false), 1)*(size(estimates, 1)-1)
+    jn = computestat(MultiJackknifeSurrogates(stat, nmulti), csinput, csinput)
+    @test_approx_eq jn.trueval trueval
+    @test_approx_eq_eps jackknife_bias(jn) (size(estimates, 1)-1)*(squeeze(mean(estimates, 1), 1) - trueval) sqrt(eps())
+    @test_approx_eq jackknife_var(jn) jnvar
+
     # Test Bootstrap
     estimates = zeros(eltype(trueval), size(csinput, 2), size(csinput, 2), size(bsindices, 2))
     for i = 1:size(bsindices, 2)
-        estimates[:, :, i] = computestat(stat(), csinput[bsindices[:, i], :], csinput[bsindices[:, i], :])
+        estimates[:, :, i] = computestat(stat, csinput[bsindices[:, i], :], csinput[bsindices[:, i], :])
     end
-    bs = computestat(Bootstrap(stat(), bsindices), csinput, csinput)
+    bs = computestat(Bootstrap(stat, bsindices), csinput, csinput)
     @test_approx_eq bs estimates
 
     # Test Bootstrap{GroupMean}
@@ -273,9 +276,9 @@ for stat in [Coherence, Coherency, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, W
     # Test Permutation (need a better test here)
     estimates = zeros(eltype(trueval), size(csinput, 2), size(csinput, 2), size(permindices, 2))
     for i = 1:size(permindices, 2)
-        estimates[:, :, i] = computestat(stat(), csinput[permindices[:, i], :], csinput)
+        estimates[:, :, i] = computestat(stat, csinput[permindices[:, i], :], csinput)
     end
-    perms = computestat(Permutation(stat(), permindices), csinput, csinput)
+    perms = computestat(Permutation(stat, permindices), csinput, csinput)
     @test_approx_eq perms estimates
 
     # Test Permutation{GroupMean}

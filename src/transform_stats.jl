@@ -2,8 +2,9 @@ export computestat, computestat!, computestat_parallel, computestat_parallel!,
        PowerSpectrum, CrossSpectrum, Coherency,
        Coherence, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, WPLI,
        WPLI2Debiased, JammalamadakaR, JuppMardiaR,
-       HurtadoModulationIndex, UniformScores, JackknifeSurrogates, Jackknife,
-       jackknife_bias, jackknife_var, Bootstrap, Permutation, GroupMean
+       HurtadoModulationIndex, UniformScores, JackknifeSurrogates,
+       MultiJackknifeSurrogates, Jackknife, jackknife_bias, jackknife_var,
+       Bootstrap, Permutation, GroupMean
 
 #
 # Utilities
@@ -316,13 +317,31 @@ end
 # (Inefficient) generic jackknife surrogate computation
 #
 
-immutable JackknifeSurrogates{R<:Statistic} <: Statistic
+abstract AbstractJackknifeSurrogates{R<:Statistic} <: Statistic
+
+# Jackknifing single samples
+immutable JackknifeSurrogates{R<:Statistic} <: AbstractJackknifeSurrogates{R}
     transform::R
 end
+Base.similar(t::JackknifeSurrogates, stat::Statistic) = JackknifeSurrogates(stat)
+
+# Jackknifing multiple samples (e.g. trials)
+# This is NOT a delete-n jackknife; it creates only div(ntrials(X), n)
+# samples
+immutable MultiJackknifeSurrogates{R<:Statistic} <: AbstractJackknifeSurrogates{R}
+    transform::R
+    n::Int
+end
+Base.similar(t::MultiJackknifeSurrogates, stat::Statistic) = MultiJackknifeSurrogates(stat, t.n)
+
 immutable JackknifeSurrogatesOutput{T<:StridedArray,S<:StridedArray}
     trueval::T
     surrogates::S
 end
+
+# Number of elements to be deleted at a time
+jnn(::JackknifeSurrogates) = 1
+jnn(t::MultiJackknifeSurrogates) = t.n
 
 function copyrows!(out, outrow, X, rowinds)
     for j = 1:size(X, 2)
@@ -335,25 +354,27 @@ function copyrows!(out, outrow, X, rowinds)
     out
 end
 
-@generated function allocoutput{T<:Complex,N}(t::JackknifeSurrogates, X::AbstractArray{T,N}, Y::AbstractArray{T,N}=X)
+@generated function allocoutput{T<:Complex,N}(t::AbstractJackknifeSurrogates, X::AbstractArray{T,N}, Y::AbstractArray{T,N}=X)
     :(JackknifeSurrogatesOutput(zeros(eltype(t.transform, X, Y), size(X, 2), size(Y, 2), $([:(size(X, $i)) for i = 3:N]...)),
-                                zeros(eltype(t.transform, X, Y), size(X, 1), size(X, 2), size(Y, 2), $([:(size(X, $i)) for i = 3:N]...))))
+                                zeros(eltype(t.transform, X, Y), div(size(X, 1), jnn(t)), size(X, 2), size(Y, 2), $([:(size(X, $i)) for i = 3:N]...))))
 end
 
-function allocwork{T<:Real}(t::JackknifeSurrogates, X::AbstractVecOrMat{Complex{T}})
-    Xsurrogate = Array(Complex{T}, size(X, 1)-1, size(X, 2))
+function allocwork{T<:Real}(t::AbstractJackknifeSurrogates, X::AbstractVecOrMat{Complex{T}})
+    Xsurrogate = Array(Complex{T}, size(X, 1)-jnn(t), size(X, 2))
     (Xsurrogate, allocoutput(t.transform, Xsurrogate), allocwork(t.transform, X), allocwork(t.transform, Xsurrogate))
 end
-function computestat!{T<:Real,V}(t::JackknifeSurrogates, out::JackknifeSurrogatesOutput, work::V,
+function computestat!{T<:Real,V}(t::AbstractJackknifeSurrogates, out::JackknifeSurrogatesOutput, work::V,
                                  X::AbstractVecOrMat{Complex{T}})
     stat = t.transform
     ntrials, nch = size(X)
+    njn = div(ntrials, jnn(t))
     Xsurrogate, outtmp, worktrue, worksurrogate = work
     trueval = out.trueval
     surrogates = out.surrogates
 
     (isa(work, Tuple{Matrix{Complex{T}}, Any, Any, Any}) &&
-     size(Xsurrogate, 1) == ntrials - 1 && size(Xsurrogate, 2) == nch) || error("invalid work object")
+     size(Xsurrogate, 1) == ntrials - jnn(t) && size(Xsurrogate, 2) == nch) || throw(ArgumentError("invalid work object"))
+    ntrials % jnn(t) == 0 || throw(DimensionMismatch("ntrials not evenly divisible by $(jnn(t))"))
     chkinput(trueval, X)
 
     fill!(surrogates, NaN)
@@ -362,13 +383,13 @@ function computestat!{T<:Real,V}(t::JackknifeSurrogates, out::JackknifeSurrogate
     computestat!(stat, trueval, worktrue, X)
 
     # First jackknife
-    copyrows!(Xsurrogate, 1, X, 2:size(X, 1))
+    copyrows!(Xsurrogate, 1, X, jnn(t)+1:size(X, 1))
     computestat!(stat, outtmp, worksurrogate, Xsurrogate)
     copy!(unsafe_view(surrogates, 1, :, :), outtmp)
 
     # Subsequent jackknifes
-    for i = 2:ntrials
-        copyrows!(Xsurrogate, i-1, X, i-1)
+    for i = 2:njn
+        copyrows!(Xsurrogate, (i-2)*jnn(t)+1, X, (i-2)*jnn(t)+1:(i-1)*jnn(t))
         computestat!(stat, outtmp, worksurrogate, Xsurrogate)
         copy!(unsafe_view(surrogates, i, :, :), outtmp)
     end
@@ -376,26 +397,29 @@ function computestat!{T<:Real,V}(t::JackknifeSurrogates, out::JackknifeSurrogate
     out
 end
 
-function allocwork{T<:Real}(t::JackknifeSurrogates, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
-    Xsurrogate = Array(Complex{T}, size(X, 1)-1, size(X, 2))
-    Ysurrogate = Array(Complex{T}, size(Y, 1)-1, size(Y, 2))
+function allocwork{T<:Real}(t::AbstractJackknifeSurrogates, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
+    Xsurrogate = Array(Complex{T}, size(X, 1)-jnn(t), size(X, 2))
+    Ysurrogate = Array(Complex{T}, size(Y, 1)-jnn(t), size(Y, 2))
     (Xsurrogate, Ysurrogate, allocoutput(t.transform, Xsurrogate, Ysurrogate),
      allocwork(t.transform, X, Y), allocwork(t.transform, Xsurrogate, Ysurrogate))
 end
-function computestat!{T<:Real,V}(t::JackknifeSurrogates, out::JackknifeSurrogatesOutput,
+function computestat!{T<:Real,V}(t::AbstractJackknifeSurrogates, out::JackknifeSurrogatesOutput,
                                  work::V,
                                  X::AbstractVecOrMat{Complex{T}},
                                  Y::AbstractVecOrMat{Complex{T}})
+    stat = t.transform
     ntrials, nchX = size(X)
+    njn = div(ntrials, jnn(t))
     nchY = size(Y, 2)
     Xsurrogate, Ysurrogate, outtmp, worktrue, worksurrogate = work
     trueval = out.trueval
     surrogates = out.surrogates
-    stat = t.transform
 
     (isa(work, Tuple{Matrix{Complex{T}}, Matrix{Complex{T}}, Any, Any, Any}) &&
-     size(Xsurrogate, 1) == ntrials - 1 && size(Xsurrogate, 2) == nchX &&
-     size(Ysurrogate, 1) == ntrials - 1 && size(Ysurrogate, 2) == nchY) || error("invalid work object")
+     size(Xsurrogate, 1) == size(Ysurrogate, 1) == ntrials - jnn(t) &&
+     size(Xsurrogate, 2) == nchX &&
+     size(Ysurrogate, 2) == nchY) || throw(ArgumentError("invalid work object"))
+    ntrials % jnn(t) == 0 || throw(DimensionMismatch("ntrials not evenly divisible by $(jnn(t))"))
     ntrials > 0 || error("X is empty")
     chkinput(trueval, X, Y)
 
@@ -405,15 +429,15 @@ function computestat!{T<:Real,V}(t::JackknifeSurrogates, out::JackknifeSurrogate
     computestat!(stat, trueval, worktrue, X, Y)
 
     # First jackknife
-    copyrows!(Xsurrogate, 1, X, 2:size(X, 1))
-    copyrows!(Ysurrogate, 1, Y, 2:size(Y, 1))
+    copyrows!(Xsurrogate, 1, X, jnn(t)+1:size(X, 1))
+    copyrows!(Ysurrogate, 1, Y, jnn(t)+1:size(X, 1))
     computestat!(stat, outtmp, worksurrogate, Xsurrogate, Ysurrogate)
     copy!(unsafe_view(surrogates, 1, :, :), outtmp)
 
     # Subsequent jackknifes
-    for i = 2:ntrials
-        copyrows!(Xsurrogate, i-1, X, i-1)
-        copyrows!(Ysurrogate, i-1, Y, i-1)
+    for i = 2:njn
+        copyrows!(Xsurrogate, (i-2)*jnn(t)+1, X, (i-2)*jnn(t)+1:(i-1)*jnn(t))
+        copyrows!(Ysurrogate, (i-2)*jnn(t)+1, Y, (i-2)*jnn(t)+1:(i-1)*jnn(t))
         computestat!(stat, outtmp, worksurrogate, Xsurrogate, Ysurrogate)
         copy!(unsafe_view(surrogates, i, :, :), outtmp)
     end
@@ -422,16 +446,16 @@ function computestat!{T<:Real,V}(t::JackknifeSurrogates, out::JackknifeSurrogate
 end
 
 # Only unit normalize once
-allocwork{R<:NormalizedPairwiseStatistic{false},T<:Real}(t::JackknifeSurrogates{R}, X::AbstractVecOrMat{Complex{T}}) =
-    (Array(Complex{T}, size(X, 1), size(X, 2)), allocwork(JackknifeSurrogates(normalized(t.transform)), X))
-allocwork{R<:NormalizedPairwiseStatistic{false},T<:Real}(t::JackknifeSurrogates{R}, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
-    (Array(Complex{T}, size(X, 1), size(X, 2)), Array(Complex{T}, size(Y, 1), size(Y, 2)), allocwork(JackknifeSurrogates(normalized(t.transform)), X, Y))
-computestat!{R<:NormalizedPairwiseStatistic{false},T<:Real}(t::JackknifeSurrogates{R}, out::JackknifeSurrogatesOutput,
+allocwork{R<:NormalizedPairwiseStatistic{false},T<:Real}(t::AbstractJackknifeSurrogates{R}, X::AbstractVecOrMat{Complex{T}}) =
+    (Array(Complex{T}, size(X, 1), size(X, 2)), allocwork(similar(t, normalized(t.transform)), X))
+allocwork{R<:NormalizedPairwiseStatistic{false},T<:Real}(t::AbstractJackknifeSurrogates{R}, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
+    (Array(Complex{T}, size(X, 1), size(X, 2)), Array(Complex{T}, size(Y, 1), size(Y, 2)), allocwork(similar(t, normalized(t.transform)), X, Y))
+computestat!{R<:NormalizedPairwiseStatistic{false},T<:Real}(t::AbstractJackknifeSurrogates{R}, out::JackknifeSurrogatesOutput,
                                                             work, X::AbstractVecOrMat{Complex{T}}) =
-    computestat!(JackknifeSurrogates(normalized(t.transform)), out, work[2], unitnormalize!(work[1], X))
-computestat!{R<:NormalizedPairwiseStatistic{false},T<:Real}(t::JackknifeSurrogates{R}, out::JackknifeSurrogatesOutput,
+    computestat!(similar(t, normalized(t.transform)), out, work[2], unitnormalize!(work[1], X))
+computestat!{R<:NormalizedPairwiseStatistic{false},T<:Real}(t::AbstractJackknifeSurrogates{R}, out::JackknifeSurrogatesOutput,
                                                             work, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
-    computestat!(JackknifeSurrogates(normalized(t.transform)), out, work[3], unitnormalize!(work[1], X), unitnormalize!(work[2], Y))
+    computestat!(similar(t, normalized(t.transform)), out, work[3], unitnormalize!(work[1], X), unitnormalize!(work[2], Y))
 
 # Estimate of variance from jackknife surrogates
 function _jackknife_var!{T}(out::AbstractArray{T}, surrogates::AbstractArray{T})
@@ -479,7 +503,7 @@ end
 jackknife_bias(jn::JackknifeSurrogatesOutput) = jackknife_bias!(similar(jn.trueval), jn)
 
 # Jackknifing of n-d arrays
-function computestat!{S,T<:Complex}(t::JackknifeSurrogates, out::JackknifeSurrogatesOutput, work::S, X::AbstractArray{T})
+function computestat!{S,T<:Complex}(t::AbstractJackknifeSurrogates, out::JackknifeSurrogatesOutput, work::S, X::AbstractArray{T})
     !isempty(X) || error(ArgumentError("X is empty"))
     for i = 1:Base.trailingsize(X, 3)
         computestat!(t, JackknifeSurrogatesOutput(unsafe_view(out.trueval, :, :, i), unsafe_view(out.surrogates, :, :, :, i)),
@@ -487,7 +511,7 @@ function computestat!{S,T<:Complex}(t::JackknifeSurrogates, out::JackknifeSurrog
     end
     out
 end
-function computestat!{S,T<:Complex}(t::JackknifeSurrogates, out::JackknifeSurrogatesOutput, work::S, X::AbstractArray{T}, Y::AbstractArray{T})
+function computestat!{S,T<:Complex}(t::AbstractJackknifeSurrogates, out::JackknifeSurrogatesOutput, work::S, X::AbstractArray{T}, Y::AbstractArray{T})
     !isempty(X) || error(ArgumentError("X is empty"))
     for i = 1:Base.trailingsize(X, 3)
         computestat!(t, JackknifeSurrogatesOutput(unsafe_view(out.trueval, :, :, i), unsafe_view(out.surrogates, :, :, :, i)),
@@ -500,10 +524,14 @@ end
 # Computation of just the jackknife trueval and variance
 #
 
-immutable Jackknife{R<:Statistic} <: Statistic
-    transform::JackknifeSurrogates{R}
+immutable Jackknife{R<:Statistic,S} <: Statistic
+    transform::S
 end
-Jackknife(t::Statistic) = Jackknife(JackknifeSurrogates(t))
+Jackknife(t::Statistic) =
+    Jackknife{typeof(t),JackknifeSurrogates{typeof(t)}}(JackknifeSurrogates(t))
+Jackknife(t::Statistic, n::Int) =
+    Jackknife{typeof(t),MultiJackknifeSurrogates{typeof(t)}}(MultiJackknifeSurrogates(t, n))
+
 immutable JackknifeOutput{T<:StridedArray}
     trueval::T
     var::T

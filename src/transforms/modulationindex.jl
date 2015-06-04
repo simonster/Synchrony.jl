@@ -46,7 +46,7 @@ function sumphases!{T<:Real}(meanamp::Vector{Float64}, phasebin::Matrix{UInt8}, 
     end
 end
 
-function finish_mi!(meanamp::Vector{Float64}, ninbin::Matrix{Int32}, iphase::Int, hmax)
+function finish_mi!(meanamp::Vector{Float64}, ninbin::AbstractVecOrMat{Int32}, iphase::Int, hmax)
     # Normalize to mean amplitudes
     d = 0.
     for ibin = 1:length(meanamp)
@@ -94,16 +94,18 @@ end
 
 allocwork{T<:Real}(t::JackknifeSurrogates{HurtadoModulationIndex}, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}=X) =
     (Array(UInt8, size(X, 1), size(X, 2)), Array(Int32, t.transform.nbins, nchannels(X)),
-     Array(T, size(X, 1)), Array(Float64, t.transform.nbins), Array(Float64, t.transform.nbins))
+     Array(T, size(X, 1)), Array(Float64, t.transform.nbins), Array(Int32, t.transform.nbins), Array(Float64, t.transform.nbins))
 function computestat!{T<:Real}(t::JackknifeSurrogates{HurtadoModulationIndex}, out::JackknifeSurrogatesOutput,
-                               work::Tuple{Matrix{Uint8}, Matrix{Int32}, Vector{T}, Vector{Float64}, Vector{Float64}},
+                               work::Tuple{Matrix{Uint8}, Matrix{Int32}, Vector{T}, Vector{Float64}, Vector{Int32}, Vector{Float64}},
                                X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
     trueval = out.trueval
     surrogates = out.surrogates
     nbins = t.transform.nbins
-    phasebin, ninbin, amp, meanamp, meanamp2 = work
+    phasebin, ninbin, amp, meanamp, ninbin2, meanamp2 = work
     chkinput(trueval, X, Y)
     size(ninbin, 1) == length(meanamp) == nbins || throw(ArgumentError("invalid work object"))
+    ntrials(X) % jnn(t) == 0 || throw(DimensionMismatch("ntrials not evenly divisible by $(jnn(t))"))
+    size(out.surrogates, 1) == div(ntrials(X), jnn(t)) || throw(DimensionMismatch("invalid output size"))
 
     binphases!(phasebin, ninbin, X)
 
@@ -116,17 +118,21 @@ function computestat!{T<:Real}(t::JackknifeSurrogates{HurtadoModulationIndex}, o
         for j = 1:size(X, 2)
             sumphases!(meanamp, phasebin, amp, j)
 
+            # Compute jackknifes
+            for i = 1:size(surrogates, 1)
+                for m = 1:nbins
+                    @inbounds meanamp2[m] = meanamp[m]
+                    @inbounds ninbin2[m] = ninbin[m, j]
+                end
+                for idel = (i-1)*jnn(t)+1:i*jnn(t)
+                    @inbounds meanamp2[phasebin[idel, j]] -= amp[idel]
+                    @inbounds ninbin2[phasebin[idel, j]] -= 1
+                end
+                surrogates[i, j, k] = finish_mi!(meanamp2, ninbin2, 1, t.transform.hmax)
+            end
+
             # Compute true modulation index
             trueval[j, k] = finish_mi!(meanamp, ninbin, j, t.transform.hmax)
-
-            # Compute jackknifes
-            for i = 1:size(X, 1)
-                for m = 1:length(meanamp)
-                    @inbounds meanamp2[m] = meanamp[m]
-                end
-                @inbounds meanamp2[phasebin[i, j]] -= amp[i]
-                surrogates[i, j, k] = finish_mi!(meanamp2, ninbin, j, t.transform.hmax)
-            end
         end
     end
 
