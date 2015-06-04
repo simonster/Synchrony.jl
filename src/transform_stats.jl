@@ -205,7 +205,7 @@ function computestat_parallel_complete!(t, out, refs, ranges)
     out
 end
 
-function computestat_parallel!{T<:Complex,V}(t::Statistic, out::AbstractArray, work::V, X::AbstractArray{T})
+function computestat_parallel!{T<:Complex,V}(t::Statistic, out, work::V, X::AbstractArray{T})
     np = max(nprocs()-1, 1)
     p = np == 1 ? (1:1) : 2:np+1
     ranges = chunkranges(checknd(t, out, X), np)
@@ -215,7 +215,7 @@ function computestat_parallel!{T<:Complex,V}(t::Statistic, out::AbstractArray, w
     computestat_parallel_complete!(t, out, refs, ranges)
 end
 
-function computestat_parallel!{T<:Complex,V}(t::Statistic, out::AbstractArray, work::V, X::AbstractArray{T}, Y::AbstractArray{T})
+function computestat_parallel!{T<:Complex,V}(t::Statistic, out, work::V, X::AbstractArray{T}, Y::AbstractArray{T})
     np = max(nprocs()-1, 1)
     p = np == 1 ? (1:1) : 2:np+1
     ranges = chunkranges(checknd(t, out, X, Y), np)
@@ -519,6 +519,17 @@ function computestat!{S,T<:Complex}(t::AbstractJackknifeSurrogates, out::Jackkni
     end
     out
 end
+checknd(t::AbstractJackknifeSurrogates, out::JackknifeSurrogatesOutput, X::AbstractArray) = checknd(t.transform, out.trueval, X)
+checknd(t::AbstractJackknifeSurrogates, out::JackknifeSurrogatesOutput, X::AbstractArray, Y::AbstractArray) = checknd(t.transform, out.trueval, X, Y)
+function computestat_parallel_complete!(t::AbstractJackknifeSurrogates, out::JackknifeSurrogatesOutput, refs, ranges)
+    for i = 1:length(refs)
+        res = fetch(refs[i])
+        isa(res, Exception) && rethrow(res)
+        copy!(unsafe_view(out.trueval, :, :, ranges[i]), res.trueval)
+        copy!(unsafe_view(out.surrogates, :, :, :, ranges[i]), res.surrogates)
+    end
+    out
+end
 
 #
 # Computation of just the jackknife trueval and variance
@@ -579,6 +590,17 @@ function computestat!{S,T<:Complex}(t::Jackknife, out::JackknifeOutput, work::S,
         surrogates = JackknifeSurrogatesOutput(unsafe_view(out.trueval, :, :, i), work[2])
         computestat!(t.transform, surrogates, work[1], unsafe_view(X, :, :, i), unsafe_view(Y, :, :, i))
         jackknife_var!(unsafe_view(out.var, :, :, i), surrogates)
+    end
+    out
+end
+checknd(t::Jackknife, out::JackknifeOutput, X::AbstractArray) = checknd(t.transform.transform, out.trueval, X)
+checknd(t::Jackknife, out::JackknifeOutput, X::AbstractArray, Y::AbstractArray) = checknd(t.transform.transform, out.trueval, X, Y)
+function computestat_parallel_complete!(t::Jackknife, out::JackknifeOutput, refs, ranges)
+    for i = 1:length(refs)
+        res = fetch(refs[i])
+        isa(res, Exception) && rethrow(res)
+        copy!(unsafe_view(out.trueval, :, :, ranges[i]), res.trueval)
+        copy!(unsafe_view(out.var, :, :, ranges[i]), res.trueval)
     end
     out
 end

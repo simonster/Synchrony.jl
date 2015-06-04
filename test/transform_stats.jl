@@ -320,13 +320,20 @@ for stat in [Coherence, Coherency, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, W
 
     # JackknifeSurrogates
     jns = computestat(JackknifeSurrogates(stat()), inputs)
+    tjnvar = mapslices(x->jackknife_var(computestat(JackknifeSurrogates(stat()), x)), inputs, (1, 2))
     @test_approx_eq jns.trueval tv
-    @test_approx_eq jackknife_var(jns) mapslices(x->jackknife_var(computestat(JackknifeSurrogates(stat()), x)), inputs, (1, 2))
+    @test_approx_eq jackknife_var(jns) tjnvar
+    jns = computestat_parallel(JackknifeSurrogates(stat()), inputs)
+    @test_approx_eq jns.trueval tv
+    @test_approx_eq jackknife_var(jns) tjnvar
 
     # Jackknife
     jn = computestat(Jackknife(stat()), inputs)
     @test_approx_eq jn.trueval tv
-    @test_approx_eq jn.var mapslices(x->computestat(Jackknife(stat()), x).var, inputs, (1, 2))
+    @test_approx_eq jn.var tjnvar
+    jns = computestat_parallel(Jackknife(stat()), inputs)
+    @test_approx_eq jn.trueval tv
+    @test_approx_eq jn.var tjnvar
 
     # Jackknife{GroupMean}
     jn = computestat(Jackknife(gmstat), inputs)
