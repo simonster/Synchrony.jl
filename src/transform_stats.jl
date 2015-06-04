@@ -710,15 +710,15 @@ allocwork{T<:Real}(t::Bootstrap, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVec
 function bootstrap!{T<:Real,U}(t::Statistic, indices::Matrix{Int32}, out::AbstractArray,
                                Xbootstrap::Matrix{Complex{T}}, Ybootstrap::Matrix{Complex{T}}, work::U,
                                X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
-    size(X, 1) == size(t.indices, 1) || throw(ArgumentError("number of bootstrap trials does not match number of trials"))
+    size(X, 1) == size(indices, 1) || throw(ArgumentError("number of bootstrap trials does not match number of trials"))
     (size(X, 1) == size(Xbootstrap, 1) &&
      size(Y, 1) == size(Ybootstrap, 1) &&
      size(X, 2) == size(Xbootstrap, 2) &&
      size(Y, 2) == size(Ybootstrap, 2)) || throw(ArgumentError("invalid work object"))
 
-    for ibootstrap = 1:size(t.indices, 2)
-        copyindices!(Xbootstrap, X, t.indices, ibootstrap)
-        copyindices!(Ybootstrap, Y, t.indices, ibootstrap)
+    for ibootstrap = 1:size(indices, 2)
+        copyindices!(Xbootstrap, X, indices, ibootstrap)
+        copyindices!(Ybootstrap, Y, indices, ibootstrap)
         computestat!(t, output_view(t, out, ibootstrap), work, Xbootstrap, Ybootstrap)
     end
     out
@@ -726,7 +726,7 @@ end
 computestat!{R<:Statistic,T<:Real}(t::Bootstrap{R}, out::AbstractArray,
                                    work::Tuple{Matrix{Complex{T}}, Matrix{Complex{T}}, Any},
                                    X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
-    bootstrap!(t, out, work[1], work[2], work[3], X, Y)
+    bootstrap!(t.transform, t.indices, out, work[1], work[2], work[3], X, Y)
 
 # Only unit normalize once
 computestat!{R<:NormalizedPairwiseStatistic{false},T<:Real}(t::Bootstrap{R}, out::AbstractArray,
@@ -766,7 +766,7 @@ computestat!{R<:Statistic,T<:Real}(t::Permutation{R}, out::AbstractArray, work::
 
 allocwork{T<:Real}(t::Permutation, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
     (Array(Complex{T}, size(X, 1), size(X, 2)), allocwork(t.transform, X, Y))
-function computestat!{T<:Real,V}(t::Statistic, indices::Matrix{Int32}, out::AbstractArray, perm::Array{Complex{T},2}, work::V,
+function permutation!{T<:Real,V}(t::Statistic, indices::Matrix{Int32}, out::AbstractArray, perm::Array{Complex{T},2}, work::V,
                                  X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
     size(X, 1) == size(indices, 1) || throw(ArgumentError("number of bootstrap trials does not match number of trials"))
     (size(X, 1) == size(perm, 1) &&

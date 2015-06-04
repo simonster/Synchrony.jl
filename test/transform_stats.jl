@@ -127,10 +127,13 @@ function dumbcfc(x, y, nbins)
     (hmax - h)/hmax
 end
 s1 = exp(im*2pi*[0.05:.1:10;]).*repmat([0.05:.1:1;], 10)
+s1s = shuffle(s1)
 s2 = exp(im*2pi*[1/18:1/9:11+1/18;]).*repmat([0.99; ones(9)*0.01], 10)
 
-out = computestat(HurtadoModulationIndex(10), s1, s2)
-@test_approx_eq out[1] dumbcfc(s1, s2, 10)
+out = computestat(HurtadoModulationIndex(10), [s1 s2 s1s], [s1 s2])
+@test_approx_eq out [dumbcfc(s1, s1, 10) dumbcfc(s1, s2, 10)
+                     dumbcfc(s2, s1, 10) dumbcfc(s2, s2, 10)
+                     dumbcfc(s1s, s1, 10) dumbcfc(s1s, s2, 10)]
 
 # Test UniformScores
 d = [50, 120, 192, 210, 220, 250, 262, 291, 292, 320, 321, 340,
@@ -148,6 +151,7 @@ bsindices = rand(1:size(csinput, 1), size(csinput, 1), 10)
 permindices = Permutation(Coherence(), size(csinput, 1), 10).indices
 groups = Vector{Tuple{Int,Int}}[[(1, 2)], [(3, 2)], [(1, 2), (2, 3)]]
 
+# Single input tests of nested stats
 for stat in [Coherence, Coherency, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, WPLI, WPLI2Debiased, JammalamadakaR, JuppMardiaR]
     # Test GroupMean
     trueval = computestat(stat(), csinput)
@@ -210,7 +214,7 @@ for stat in [Coherence, Coherency, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, W
     bs = computestat(Bootstrap(gmstat, bsindices), csinput)
     @test_approx_eq bs squeeze([estimates[1, 2, :]; estimates[2, 3, :]; (estimates[1, 2, :] + estimates[2, 3, :])/2], 2)
 
-    # Test permutations
+    # Test Permutation
     estimates = zeros(eltype(trueval), size(csinput, 2), size(csinput, 2), size(permindices, 2))
     for i = 1:size(permindices, 2)
         estimates[:, :, i] = computestat(stat(), csinput[permindices[:, i], :], csinput)
@@ -220,6 +224,62 @@ for stat in [Coherence, Coherency, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, W
 
     # Test Permutation{GroupMean}
     bs = computestat(Permutation(gmstat, permindices), csinput)
+    @test_approx_eq bs squeeze([estimates[1, 2, :]; estimates[2, 3, :]; (estimates[1, 2, :] + estimates[2, 3, :])/2], 2)
+end
+
+# Two input tests of nested stats
+for stat in [Coherence, Coherency, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, WPLI, WPLI2Debiased, JammalamadakaR, JuppMardiaR, HurtadoModulationIndex]
+    # Test GroupMean
+    trueval = computestat(stat(), csinput, csinput)
+    gmstat = GroupMean(stat(), size(csinput, 2), groups)
+    gm = computestat(gmstat, csinput, csinput)
+    @test_approx_eq gm [trueval[1, 2], trueval[2, 3], (trueval[1, 2] + trueval[2, 3])/2]
+
+    # Test JackknifeSurrogates
+    estimates = zeros(eltype(trueval), size(csinput, 1), size(csinput, 2), size(csinput, 2))
+    for i = 1:size(csinput, 1)
+        estimates[i, :, :] = computestat(stat(), csinput[[1:i-1; i+1:size(csinput, 1)], :], csinput[[1:i-1; i+1:size(csinput, 1)], :])
+    end
+    jnvar = squeeze(var(estimates, 1, corrected=false), 1)*(size(csinput, 1)-1)
+    jn = computestat(JackknifeSurrogates(stat()), csinput, csinput)
+    @test_approx_eq jn.trueval trueval
+    @test_approx_eq_eps jackknife_bias(jn) (size(csinput, 1)-1)*(squeeze(mean(estimates, 1), 1) - trueval) sqrt(eps())
+    @test_approx_eq jackknife_var(jn) jnvar
+
+    # Test Jackknife
+    a = Jackknife(stat())
+    jn = computestat(Jackknife(stat()), csinput, csinput)
+    @test_approx_eq jn.trueval trueval
+    @test_approx_eq jn.var jnvar
+
+    # Test Jackknife{GroupMean}
+    jn = computestat(Jackknife(gmstat), csinput, csinput)
+    @test_approx_eq jn.trueval [trueval[1, 2], trueval[2, 3], (trueval[1, 2] + trueval[2, 3])/2]
+    est2 = mean([estimates[:, 1, 2] estimates[:, 2, 3]], 2)
+    @test_approx_eq jn.var [jnvar[1, 2], jnvar[2, 3], var(est2, corrected=false)*(size(csinput, 1)-1)]
+
+    # Test Bootstrap
+    estimates = zeros(eltype(trueval), size(csinput, 2), size(csinput, 2), size(bsindices, 2))
+    for i = 1:size(bsindices, 2)
+        estimates[:, :, i] = computestat(stat(), csinput[bsindices[:, i], :], csinput[bsindices[:, i], :])
+    end
+    bs = computestat(Bootstrap(stat(), bsindices), csinput, csinput)
+    @test_approx_eq bs estimates
+
+    # Test Bootstrap{GroupMean}
+    bs = computestat(Bootstrap(gmstat, bsindices), csinput, csinput)
+    @test_approx_eq bs squeeze([estimates[1, 2, :]; estimates[2, 3, :]; (estimates[1, 2, :] + estimates[2, 3, :])/2], 2)
+
+    # Test Permutation (need a better test here)
+    estimates = zeros(eltype(trueval), size(csinput, 2), size(csinput, 2), size(permindices, 2))
+    for i = 1:size(permindices, 2)
+        estimates[:, :, i] = computestat(stat(), csinput[permindices[:, i], :], csinput)
+    end
+    perms = computestat(Permutation(stat(), permindices), csinput, csinput)
+    @test_approx_eq perms estimates
+
+    # Test Permutation{GroupMean}
+    bs = computestat(Permutation(gmstat, permindices), csinput, csinput)
     @test_approx_eq bs squeeze([estimates[1, 2, :]; estimates[2, 3, :]; (estimates[1, 2, :] + estimates[2, 3, :])/2], 2)
 end
 
