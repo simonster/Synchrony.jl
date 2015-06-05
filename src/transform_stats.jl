@@ -365,6 +365,7 @@ function allocwork{T<:Real}(t::AbstractJackknifeSurrogates, X::AbstractVecOrMat{
 end
 function computestat!{T<:Real,V}(t::AbstractJackknifeSurrogates, out::JackknifeSurrogatesOutput, work::V,
                                  X::AbstractVecOrMat{Complex{T}})
+    isa(work, Tuple{Matrix{Complex{T}}, Any, Any, Any}) || throw(ArgumentError("invalid work object"))
     stat = t.transform
     ntrials, nch = size(X)
     njn = div(ntrials, jnn(t))
@@ -372,8 +373,7 @@ function computestat!{T<:Real,V}(t::AbstractJackknifeSurrogates, out::JackknifeS
     trueval = out.trueval
     surrogates = out.surrogates
 
-    (isa(work, Tuple{Matrix{Complex{T}}, Any, Any, Any}) &&
-     size(Xsurrogate, 1) == ntrials - jnn(t) && size(Xsurrogate, 2) == nch) || throw(ArgumentError("invalid work object"))
+    (size(Xsurrogate, 1) == ntrials - jnn(t) && size(Xsurrogate, 2) == nch) || throw(ArgumentError("invalid work object"))
     ntrials % jnn(t) == 0 || throw(DimensionMismatch("ntrials not evenly divisible by $(jnn(t))"))
     chkinput(trueval, X)
 
@@ -407,6 +407,7 @@ function computestat!{T<:Real,V}(t::AbstractJackknifeSurrogates, out::JackknifeS
                                  work::V,
                                  X::AbstractVecOrMat{Complex{T}},
                                  Y::AbstractVecOrMat{Complex{T}})
+    isa(work, Tuple{Matrix{Complex{T}}, Matrix{Complex{T}}, Any, Any, Any}) || throw(ArgumentError("invalid work object"))
     stat = t.transform
     ntrials, nchX = size(X)
     njn = div(ntrials, jnn(t))
@@ -415,8 +416,7 @@ function computestat!{T<:Real,V}(t::AbstractJackknifeSurrogates, out::JackknifeS
     trueval = out.trueval
     surrogates = out.surrogates
 
-    (isa(work, Tuple{Matrix{Complex{T}}, Matrix{Complex{T}}, Any, Any, Any}) &&
-     size(Xsurrogate, 1) == size(Ysurrogate, 1) == ntrials - jnn(t) &&
+    (size(Xsurrogate, 1) == size(Ysurrogate, 1) == ntrials - jnn(t) &&
      size(Xsurrogate, 2) == nchX &&
      size(Ysurrogate, 2) == nchY) || throw(ArgumentError("invalid work object"))
     ntrials % jnn(t) == 0 || throw(DimensionMismatch("ntrials not evenly divisible by $(jnn(t))"))
@@ -635,12 +635,12 @@ Base.eltype{T<:Real}(::JackknifeCorrelation, X::AbstractArray{Complex{T}}) = T
 function allocwork{T<:Real}(t::JackknifeCorrelation, X::AbstractVecOrMat{Complex{T}})
     outtype = eltype(t.transform.transform, X)
     outtype <: Real || throw(ArgumentError("JackknifeCorrelation defined only for statistics with real outputs"))
-    (allocwork(t.transform, X), zeros(outtype, div(size(X, 1), jnn(t.transform)), size(X, 2), size(X, 2)))
+    (zeros(outtype, div(size(X, 1), jnn(t.transform)), size(X, 2), size(X, 2)), allocwork(t.transform, X))
 end
 function allocwork{T<:Real}(t::JackknifeCorrelation, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
     outtype = eltype(t.transform.transform, X)
     outtype <: Real || throw(ArgumentError("JackknifeCorrelation defined only for statistics with real outputs"))
-    (allocwork(t.transform, X, Y), zeros(outtype, div(size(X, 1), jnn(t.transform)), size(X, 2), size(Y, 2)))
+    (zeros(outtype, div(size(X, 1), jnn(t.transform)), size(X, 2), size(Y, 2)), allocwork(t.transform, X, Y))
 end
 
 function jackknife_cor!{T<:Real}(t::JackknifeCorrelation, out::AbstractVecOrMat{T}, surrogates::AbstractArray{T,3})
@@ -660,22 +660,21 @@ function jackknife_cor!{T<:Real}(t::JackknifeCorrelation, out::AbstractVecOrMat{
         end
         out[itrail] = -cov/sqrt(xssq*t.yssq)
     end
+    out
 end
 
-function computestat!{T<:Real,S}(t::JackknifeCorrelation, out::AbstractMatrix{T}, work::Tuple{Any, Array{S,3}},
-                                 X::AbstractVecOrMat{Complex{T}})
-    surrogates = JackknifeSurrogatesOutput(out, work[2])
-    computestat!(t.transform, surrogates, work[1], X)
-    jackknife_cor!(t, out, work[2])
-    out
+function computestat!{T<:Real}(t::JackknifeCorrelation, out::AbstractMatrix{T}, work::Tuple{Array{T,3},Any},
+                               X::AbstractVecOrMat{Complex{T}})
+    surrogates = JackknifeSurrogatesOutput(out, work[1])
+    computestat!(t.transform, surrogates, work[2], X)
+    jackknife_cor!(t, out, work[1])
 end
-function computestat!{T<:Real,S}(t::JackknifeCorrelation, out::AbstractMatrix{T}, work::Tuple{Any, Array{S,3}},
-                                 X::AbstractVecOrMat{Complex{T}},
-                                 Y::AbstractVecOrMat{Complex{T}})
-    surrogates = JackknifeSurrogatesOutput(out, work[2])
-    computestat!(t.transform, surrogates, work[1], X, Y)
-    jackknife_cor!(t, out, work[2])
-    out
+function computestat!{T<:Real}(t::JackknifeCorrelation, out::AbstractMatrix{T}, work::Tuple{Array{T,3},Any},
+                               X::AbstractVecOrMat{Complex{T}},
+                               Y::AbstractVecOrMat{Complex{T}})
+    surrogates = JackknifeSurrogatesOutput(out, work[1])
+    computestat!(t.transform, surrogates, work[2], X, Y)
+    jackknife_cor!(t, out, work[1])
 end
 
 #
@@ -915,6 +914,56 @@ computestat!{R<:NormalizedPairwiseStatistic{false},T<:Real}(t::Permutation{R}, o
                                                             X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
     permutation!(normalized(t.transform), t.indices, out, work[1], work[2][3],
                unitnormalize!(work[2][1], X), unitnormalize!(work[2][2], Y))
+
+#
+# Efficient permutation for JackknifeCorrelation
+#
+
+function perm_jackknife_cor!{T<:Real}(t::JackknifeCorrelation, out::AbstractArray{T}, surrogates::AbstractArray{T,3}, indices::Matrix{Int32})
+    y = t.y
+    trailsize = Base.trailingsize(surrogates, 2)
+    @inbounds for itrail = 1:trailsize
+        μx = zero(T)
+        @simd for isurrogate = 1:size(surrogates, 1)
+            μx += surrogates[isurrogate, itrail]
+        end
+        μx /= size(surrogates, 1)
+        for iperm = 1:size(indices, 2)
+            cov = zero(T)
+            xssq = zero(T)
+            @simd for isurrogate = 1:size(surrogates, 1)
+                centeredx = surrogates[indices[isurrogate, iperm], itrail] - μx
+                cov += centeredx*y[isurrogate]
+                xssq += abs2(centeredx)
+            end
+            out[(iperm-1)*trailsize+itrail] = -cov/sqrt(xssq*t.yssq)
+        end
+    end
+    out
+end
+
+allocwork{R<:JackknifeCorrelation,T<:Real}(t::Permutation{R}, X::AbstractVecOrMat{Complex{T}}) = allocwork(t.transform, X)
+function computestat!{R<:JackknifeCorrelation,T<:Real}(t::Permutation{R}, out::AbstractArray, work::Tuple{Array{T,3},Any},
+                                                       X::AbstractVecOrMat{Complex{T}})
+    indices = t.indices
+    size(X, 1) == size(indices, 1) || throw(ArgumentError("number of permutation trials does not match number of trials"))
+
+    surrogates = JackknifeSurrogatesOutput(output_view(t.transform.transform.transform, out, 1), work[1])
+    computestat!(t.transform.transform, surrogates, work[2], X)
+    perm_jackknife_cor!(t.transform, out, work[1], indices)
+end
+
+allocwork{R<:JackknifeCorrelation,T<:Real}(t::Permutation{R}, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
+    allocwork(t.transform, X, Y)
+function computestat!{R<:JackknifeCorrelation,T<:Real}(t::Permutation{R}, out::AbstractArray, work::Tuple{Array{T,3},Any},
+                                                       X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
+    indices = t.indices
+    size(X, 1) == size(indices, 1) || throw(ArgumentError("number of bootstrap trials does not match number of trials"))
+
+    surrogates = JackknifeSurrogatesOutput(output_view(t.transform.transform.transform, out, 1), work[1])
+    computestat!(t.transform.transform, surrogates, work[2], X, Y)
+    perm_jackknife_cor!(t.transform, out, work[1], indices)
+end
 
 #
 # Transforms
