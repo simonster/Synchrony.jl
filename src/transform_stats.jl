@@ -665,6 +665,7 @@ end
 
 function computestat!{T<:Real}(t::JackknifeCorrelation, out::AbstractMatrix{T}, work::Tuple{Array{T,3},Any},
                                X::AbstractVecOrMat{Complex{T}})
+    length(t.y) == div(size(X, 1), jnn(t.transform)) || throw(DimensionMismatch("length of y does not match number of surrogates"))
     surrogates = JackknifeSurrogatesOutput(out, work[1])
     computestat!(t.transform, surrogates, work[2], X)
     jackknife_cor!(t, out, work[1])
@@ -672,6 +673,7 @@ end
 function computestat!{T<:Real}(t::JackknifeCorrelation, out::AbstractMatrix{T}, work::Tuple{Array{T,3},Any},
                                X::AbstractVecOrMat{Complex{T}},
                                Y::AbstractVecOrMat{Complex{T}})
+    length(t.y) == div(size(X, 1), jnn(t.transform)) || throw(DimensionMismatch("length of y does not match number of surrogates"))
     surrogates = JackknifeSurrogatesOutput(out, work[1])
     computestat!(t.transform, surrogates, work[2], X, Y)
     jackknife_cor!(t, out, work[1])
@@ -890,7 +892,7 @@ allocwork{T<:Real}(t::Permutation, X::AbstractVecOrMat{Complex{T}}, Y::AbstractV
     (Array(Complex{T}, size(X, 1), size(X, 2)), allocwork(t.transform, X, Y))
 function permutation!{T<:Real,V}(t::Statistic, indices::Matrix{Int32}, out::AbstractArray, perm::Array{Complex{T},2}, work::V,
                                  X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
-    size(X, 1) == size(indices, 1) || throw(ArgumentError("number of bootstrap trials does not match number of trials"))
+    size(X, 1) == size(indices, 1) || throw(ArgumentError("number of permutation trials does not match number of trials"))
     (size(X, 1) == size(perm, 1) &&
      size(X, 2) == size(perm, 2)) || throw(ArgumentError("invalid work object"))
 
@@ -919,7 +921,7 @@ computestat!{R<:NormalizedPairwiseStatistic{false},T<:Real}(t::Permutation{R}, o
 # Efficient permutation for JackknifeCorrelation
 #
 
-function perm_jackknife_cor!{T<:Real}(t::JackknifeCorrelation, out::AbstractArray{T}, surrogates::AbstractArray{T,3}, indices::Matrix{Int32})
+function perm_jackknife_cor!{T<:Real}(t::JackknifeCorrelation, out::AbstractArray{T}, surrogates::AbstractArray{T,3}, permy::Matrix)
     y = t.y
     trailsize = Base.trailingsize(surrogates, 2)
     @inbounds for itrail = 1:trailsize
@@ -928,13 +930,17 @@ function perm_jackknife_cor!{T<:Real}(t::JackknifeCorrelation, out::AbstractArra
             μx += surrogates[isurrogate, itrail]
         end
         μx /= size(surrogates, 1)
-        for iperm = 1:size(indices, 2)
+
+        xssq = zero(T)
+        @simd for isurrogate = 1:size(surrogates, 1)
+            surrogates[isurrogate, itrail] -= μx
+            xssq += abs2(surrogates[isurrogate, itrail])
+        end
+
+        for iperm = 1:size(permy, 2)
             cov = zero(T)
-            xssq = zero(T)
             @simd for isurrogate = 1:size(surrogates, 1)
-                centeredx = surrogates[indices[isurrogate, iperm], itrail] - μx
-                cov += centeredx*y[isurrogate]
-                xssq += abs2(centeredx)
+                cov += surrogates[isurrogate, itrail]*permy[isurrogate, iperm]
             end
             out[(iperm-1)*trailsize+itrail] = -cov/sqrt(xssq*t.yssq)
         end
@@ -942,27 +948,46 @@ function perm_jackknife_cor!{T<:Real}(t::JackknifeCorrelation, out::AbstractArra
     out
 end
 
-allocwork{R<:JackknifeCorrelation,T<:Real}(t::Permutation{R}, X::AbstractVecOrMat{Complex{T}}) = allocwork(t.transform, X)
-function computestat!{R<:JackknifeCorrelation,T<:Real}(t::Permutation{R}, out::AbstractArray, work::Tuple{Array{T,3},Any},
-                                                       X::AbstractVecOrMat{Complex{T}})
-    indices = t.indices
-    size(X, 1) == size(indices, 1) || throw(ArgumentError("number of permutation trials does not match number of trials"))
 
-    surrogates = JackknifeSurrogatesOutput(output_view(t.transform.transform.transform, out, 1), work[1])
-    computestat!(t.transform.transform, surrogates, work[2], X)
-    perm_jackknife_cor!(t.transform, out, work[1], indices)
+function invpermy(y, indices)
+    size(indices, 1) == length(y) || throw(DimensionMismatch("length of indices does not match length of y"))
+    permy = zeros(eltype(y), size(indices))
+    for j = 1:size(indices, 2)
+        @simd for i = 1:size(indices, 1)
+            @inbounds permy[indices[i, j], j] = y[i]
+        end
+    end
+    permy
+end
+
+allocwork{R<:JackknifeCorrelation,T<:Real}(t::Permutation{R}, X::AbstractVecOrMat{Complex{T}}) =
+    (invpermy(t.transform.y, t.indices), allocwork(t.transform, X))
+function computestat!{R<:JackknifeCorrelation,T<:Real,V<:Real}(t::Permutation{R}, out::AbstractArray, work::Tuple{Matrix{V},Tuple{Array{T,3},Any}},
+                                                               X::AbstractVecOrMat{Complex{T}})
+    indices = t.indices
+    yvals, twork = work
+    njn = div(size(X, 1), jnn(t.transform.transform))
+    njn == size(indices, 1) || throw(ArgumentError("number of permutation trials does not match number of trials"))
+    njn == length(t.transform.y) || throw(DimensionMismatch("length of y does not match number of surrogates"))
+
+    surrogates = JackknifeSurrogatesOutput(output_view(t.transform.transform.transform, out, 1), twork[1])
+    computestat!(t.transform.transform, surrogates, twork[2], X)
+    perm_jackknife_cor!(t.transform, out, twork[1], yvals)
 end
 
 allocwork{R<:JackknifeCorrelation,T<:Real}(t::Permutation{R}, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
-    allocwork(t.transform, X, Y)
-function computestat!{R<:JackknifeCorrelation,T<:Real}(t::Permutation{R}, out::AbstractArray, work::Tuple{Array{T,3},Any},
-                                                       X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
+    (invpermy(t.transform.y, t.indices), allocwork(t.transform, X, Y))
+function computestat!{R<:JackknifeCorrelation,T<:Real,V<:Real}(t::Permutation{R}, out::AbstractArray, work::Tuple{Matrix{V},Tuple{Array{T,3},Any}},
+                                                               X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
     indices = t.indices
-    size(X, 1) == size(indices, 1) || throw(ArgumentError("number of bootstrap trials does not match number of trials"))
+    yvals, twork = work
+    njn = div(size(X, 1), jnn(t.transform.transform))
+    njn == size(indices, 1) || throw(ArgumentError("number of permutation trials does not match number of trials"))
+    njn == length(t.transform.y) || throw(DimensionMismatch("length of y does not match number of surrogates"))
 
-    surrogates = JackknifeSurrogatesOutput(output_view(t.transform.transform.transform, out, 1), work[1])
-    computestat!(t.transform.transform, surrogates, work[2], X, Y)
-    perm_jackknife_cor!(t.transform, out, work[1], indices)
+    surrogates = JackknifeSurrogatesOutput(output_view(t.transform.transform.transform, out, 1), twork[1])
+    computestat!(t.transform.transform, surrogates, twork[2], X, Y)
+    perm_jackknife_cor!(t.transform, out, twork[1], yvals)
 end
 
 #
