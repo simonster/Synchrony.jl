@@ -92,10 +92,10 @@ function computestat!{T<:Real}(t::HurtadoModulationIndex, out::AbstractMatrix{T}
     out
 end
 
-allocwork{T<:Real}(t::JackknifeSurrogates{HurtadoModulationIndex}, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}=X) =
+allocwork{T<:Real}(t::AbstractJackknifeSurrogates{HurtadoModulationIndex}, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}=X) =
     (Array(UInt8, size(X, 1), size(X, 2)), Array(Int32, t.transform.nbins, nchannels(X)),
      Array(T, size(X, 1)), Array(Float64, t.transform.nbins), Array(Int32, t.transform.nbins), Array(Float64, t.transform.nbins))
-function computestat!{T<:Real}(t::JackknifeSurrogates{HurtadoModulationIndex}, out::JackknifeSurrogatesOutput,
+function computestat!{T<:Real}(t::AbstractJackknifeSurrogates{HurtadoModulationIndex}, out::JackknifeSurrogatesOutput,
                                work::Tuple{Matrix{Uint8}, Matrix{Int32}, Vector{T}, Vector{Float64}, Vector{Int32}, Vector{Float64}},
                                X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
     trueval = out.trueval

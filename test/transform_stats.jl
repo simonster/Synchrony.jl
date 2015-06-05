@@ -145,7 +145,9 @@ v = computestat(UniformScores(groups), Complex128[rand(length(d)).*cis(d/180*pi)
 @test_approx_eq_eps v[1, 2] 12.81 0.01
 
 csinput = complex(randn(25, 3), randn(25, 3))
+csinput2 = complex(randn(25, 3), randn(25, 3))
 nmulti = 5
+corvec = randn(size(csinput, 1))
 
 # Generate bootstrap weights
 bsindices = rand(1:size(csinput, 1), size(csinput, 1), 10)
@@ -176,6 +178,15 @@ for stat in [Coherence(), Coherency(), MeanPhaseDiff(), PLV(), PPC(), PLI(), PLI
     jn = computestat(Jackknife(stat), csinput)
     @test_approx_eq jn.trueval trueval
     @test_approx_eq jn.var jnvar
+
+    # Test JackknifeCorrelation
+    if eltype(trueval) <: Real
+        truejc = -reshape(cor(reshape(estimates, size(estimates, 1), size(estimates, 2)*size(estimates, 3)), corvec, vardim=1), size(csinput, 2), size(csinput, 2))
+        jc = computestat(JackknifeCorrelation(stat, corvec), csinput)
+        @test_approx_eq jc truejc
+    else
+        @test_throws ArgumentError computestat(JackknifeCorrelation(stat, corvec), csinput)
+    end
 
     # Test Jackknife{GroupMean}
     jn = computestat(Jackknife(gmstat), csinput)
@@ -222,67 +233,75 @@ end
 # Two input tests of nested stats
 for stat in [Coherence(), Coherency(), MeanPhaseDiff(), PLV(), PPC(), PLI(), PLI2Unbiased(), WPLI(), WPLI2Debiased(), JammalamadakaR(), JuppMardiaR(), HurtadoModulationIndex(5)]
     # Test GroupMean
-    trueval = computestat(stat, csinput, csinput)
+    trueval = computestat(stat, csinput, csinput2)
     gmstat = GroupMean(stat, size(csinput, 2), groups)
-    gm = computestat(gmstat, csinput, csinput)
+    gm = computestat(gmstat, csinput, csinput2)
     @test_approx_eq gm [trueval[1, 2], trueval[2, 3], (trueval[1, 2] + trueval[2, 3])/2]
 
     # Test JackknifeSurrogates
-    estimates = zeros(eltype(trueval), size(csinput, 1), size(csinput, 2), size(csinput, 2))
+    estimates = zeros(eltype(trueval), size(csinput, 1), size(csinput, 2), size(csinput2, 2))
     for i = 1:size(csinput, 1)
-        estimates[i, :, :] = computestat(stat, csinput[[1:i-1; i+1:size(csinput, 1)], :], csinput[[1:i-1; i+1:size(csinput, 1)], :])
+        estimates[i, :, :] = computestat(stat, csinput[[1:i-1; i+1:size(csinput, 1)], :], csinput2[[1:i-1; i+1:size(csinput, 1)], :])
     end
     jnvar = squeeze(var(estimates, 1, corrected=false), 1)*(size(csinput, 1)-1)
-    jn = computestat(JackknifeSurrogates(stat), csinput, csinput)
+    jn = computestat(JackknifeSurrogates(stat), csinput, csinput2)
     @test_approx_eq jn.trueval trueval
     @test_approx_eq_eps jackknife_bias(jn) (size(csinput, 1)-1)*(squeeze(mean(estimates, 1), 1) - trueval) sqrt(eps())
     @test_approx_eq jackknife_var(jn) jnvar
 
     # Test Jackknife
-    a = Jackknife(stat)
-    jn = computestat(Jackknife(stat), csinput, csinput)
+    jn = computestat(Jackknife(stat), csinput, csinput2)
     @test_approx_eq jn.trueval trueval
     @test_approx_eq jn.var jnvar
 
+    # Test JackknifeCorrelation
+    if eltype(trueval) <: Real
+        truejc = -reshape(cor(reshape(estimates, size(estimates, 1), size(estimates, 2)*size(estimates, 3)), corvec, vardim=1), size(csinput, 2), size(csinput, 2))
+        jc = computestat(JackknifeCorrelation(stat, corvec), csinput, csinput2)
+        @test_approx_eq jc truejc
+    else
+        @test_throws ArgumentError computestat(JackknifeCorrelation(stat, corvec), csinput, csinput2)
+    end
+
     # Test Jackknife{GroupMean}
-    jn = computestat(Jackknife(gmstat), csinput, csinput)
+    jn = computestat(Jackknife(gmstat), csinput, csinput2)
     @test_approx_eq jn.trueval [trueval[1, 2], trueval[2, 3], (trueval[1, 2] + trueval[2, 3])/2]
     est2 = mean([estimates[:, 1, 2] estimates[:, 2, 3]], 2)
     @test_approx_eq jn.var [jnvar[1, 2], jnvar[2, 3], var(est2, corrected=false)*(size(csinput, 1)-1)]
 
     # Test MultiJackknifeSurrogates
-    estimates = zeros(eltype(trueval), div(size(csinput, 1), nmulti), size(csinput, 2), size(csinput, 2))
+    estimates = zeros(eltype(trueval), div(size(csinput, 1), nmulti), size(csinput, 2), size(csinput2, 2))
     for i = 1:size(estimates, 1)
-        estimates[i, :, :] = computestat(stat, csinput[[1:(i-1)*nmulti; i*nmulti+1:size(csinput, 1)], :], csinput[[1:(i-1)*nmulti; i*nmulti+1:size(csinput, 1)], :])
+        estimates[i, :, :] = computestat(stat, csinput[[1:(i-1)*nmulti; i*nmulti+1:size(csinput, 1)], :], csinput2[[1:(i-1)*nmulti; i*nmulti+1:size(csinput, 1)], :])
     end
     jnvar = squeeze(var(estimates, 1, corrected=false), 1)*(size(estimates, 1)-1)
-    jn = computestat(MultiJackknifeSurrogates(stat, nmulti), csinput, csinput)
+    jn = computestat(MultiJackknifeSurrogates(stat, nmulti), csinput, csinput2)
     @test_approx_eq jn.trueval trueval
     @test_approx_eq_eps jackknife_bias(jn) (size(estimates, 1)-1)*(squeeze(mean(estimates, 1), 1) - trueval) sqrt(eps())
     @test_approx_eq jackknife_var(jn) jnvar
 
     # Test Bootstrap
-    estimates = zeros(eltype(trueval), size(csinput, 2), size(csinput, 2), size(bsindices, 2))
+    estimates = zeros(eltype(trueval), size(csinput, 2), size(csinput2, 2), size(bsindices, 2))
     for i = 1:size(bsindices, 2)
-        estimates[:, :, i] = computestat(stat, csinput[bsindices[:, i], :], csinput[bsindices[:, i], :])
+        estimates[:, :, i] = computestat(stat, csinput[bsindices[:, i], :], csinput2[bsindices[:, i], :])
     end
-    bs = computestat(Bootstrap(stat, bsindices), csinput, csinput)
+    bs = computestat(Bootstrap(stat, bsindices), csinput, csinput2)
     @test_approx_eq bs estimates
 
     # Test Bootstrap{GroupMean}
-    bs = computestat(Bootstrap(gmstat, bsindices), csinput, csinput)
+    bs = computestat(Bootstrap(gmstat, bsindices), csinput, csinput2)
     @test_approx_eq bs squeeze([estimates[1, 2, :]; estimates[2, 3, :]; (estimates[1, 2, :] + estimates[2, 3, :])/2], 2)
 
-    # Test Permutation (need a better test here)
-    estimates = zeros(eltype(trueval), size(csinput, 2), size(csinput, 2), size(permindices, 2))
+    # Test Permutation
+    estimates = zeros(eltype(trueval), size(csinput, 2), size(csinput2, 2), size(permindices, 2))
     for i = 1:size(permindices, 2)
-        estimates[:, :, i] = computestat(stat, csinput[permindices[:, i], :], csinput)
+        estimates[:, :, i] = computestat(stat, csinput[permindices[:, i], :], csinput2)
     end
-    perms = computestat(Permutation(stat, permindices), csinput, csinput)
+    perms = computestat(Permutation(stat, permindices), csinput, csinput2)
     @test_approx_eq perms estimates
 
     # Test Permutation{GroupMean}
-    bs = computestat(Permutation(gmstat, permindices), csinput, csinput)
+    bs = computestat(Permutation(gmstat, permindices), csinput, csinput2)
     @test_approx_eq bs squeeze([estimates[1, 2, :]; estimates[2, 3, :]; (estimates[1, 2, :] + estimates[2, 3, :])/2], 2)
 end
 

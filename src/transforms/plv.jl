@@ -63,6 +63,10 @@ function computestat!{T<:Real}(t::Union(PLV{true}, PPC{true}), out::AbstractMatr
                                X::AbstractVecOrMat{Complex{T}})
     chkinput(out, X)
     finish!(typeof(t), out, Ac_mul_A!(work, X), ntrials(X))
+    for i = 1:size(out, 1)
+        @inbounds out[i, i] = 1
+    end
+    out
 end
 
 # Two input matrices

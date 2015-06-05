@@ -3,8 +3,8 @@ export computestat, computestat!, computestat_parallel, computestat_parallel!,
        Coherence, MeanPhaseDiff, PLV, PPC, PLI, PLI2Unbiased, WPLI,
        WPLI2Debiased, JammalamadakaR, JuppMardiaR,
        HurtadoModulationIndex, UniformScores, JackknifeSurrogates,
-       MultiJackknifeSurrogates, Jackknife, jackknife_bias, jackknife_var,
-       Bootstrap, Permutation, GroupMean
+       MultiJackknifeSurrogates, jackknife_bias, jackknife_var,
+       Jackknife, JackknifeCorrelation, Bootstrap, Permutation, GroupMean
 
 #
 # Utilities
@@ -554,9 +554,9 @@ end
 end
 
 allocwork{T<:Real}(t::Jackknife, X::AbstractVecOrMat{Complex{T}}) =
-    (allocwork(t.transform, X), zeros(eltype(t.transform.transform, X), size(X, 1), size(X, 2), size(X, 2)))
+    (allocwork(t.transform, X), zeros(eltype(t.transform.transform, X), div(size(X, 1), jnn(t.transform)), size(X, 2), size(X, 2)))
 allocwork{T<:Real}(t::Jackknife, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}}) =
-    (allocwork(t.transform, X, Y), zeros(eltype(t.transform.transform, X, Y), size(X, 1), size(X, 2), size(Y, 2)))
+    (allocwork(t.transform, X, Y), zeros(eltype(t.transform.transform, X, Y), div(size(X, 1), jnn(t.transform)), size(X, 2), size(Y, 2)))
 
 function computestat!{T<:Real,S}(t::Jackknife, out::JackknifeOutput, work::Tuple{Any, Array{S,3}},
                                  X::AbstractVecOrMat{Complex{T}})
@@ -602,6 +602,79 @@ function computestat_parallel_complete!(t::Jackknife, out::JackknifeOutput, refs
         copy!(unsafe_view(out.trueval, :, :, ranges[i]), res.trueval)
         copy!(unsafe_view(out.var, :, :, ranges[i]), res.trueval)
     end
+    out
+end
+
+#
+# Correlation of jackknife surrogates with another statistic
+#
+
+immutable JackknifeCorrelation{R<:Statistic,S,T<:FloatingPoint} <: PairwiseStatistic
+    transform::S
+    y::Vector{T}
+    yssq::T
+
+    function JackknifeCorrelation(transform, y)
+        μy = mean(y)
+        yssq = zero(eltype(y))
+        centeredy = zeros(eltype(y), length(y))
+        @inbounds @simd for i = 1:length(y)
+            centeredy[i] = y[i] - μy
+            yssq += abs2(y[i] - μy)
+        end
+        new(transform, centeredy, yssq)
+    end
+end
+JackknifeCorrelation(t::PairwiseStatistic, y::AbstractVector) =
+    JackknifeCorrelation{typeof(t),JackknifeSurrogates{typeof(t)},eltype(y)}(JackknifeSurrogates(t), float(y))
+JackknifeCorrelation(t::PairwiseStatistic, n::Int, y::AbstractVector) =
+    JackknifeCorrelation{typeof(t),MultiJackknifeSurrogates{typeof(t)},eltype(y)}(MultiJackknifeSurrogates(t, n), float(y))
+
+Base.eltype{T<:Real}(::JackknifeCorrelation, X::AbstractArray{Complex{T}}) = T
+
+function allocwork{T<:Real}(t::JackknifeCorrelation, X::AbstractVecOrMat{Complex{T}})
+    outtype = eltype(t.transform.transform, X)
+    outtype <: Real || throw(ArgumentError("JackknifeCorrelation defined only for statistics with real outputs"))
+    (allocwork(t.transform, X), zeros(outtype, div(size(X, 1), jnn(t.transform)), size(X, 2), size(X, 2)))
+end
+function allocwork{T<:Real}(t::JackknifeCorrelation, X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
+    outtype = eltype(t.transform.transform, X)
+    outtype <: Real || throw(ArgumentError("JackknifeCorrelation defined only for statistics with real outputs"))
+    (allocwork(t.transform, X, Y), zeros(outtype, div(size(X, 1), jnn(t.transform)), size(X, 2), size(Y, 2)))
+end
+
+function jackknife_cor!{T<:Real}(t::JackknifeCorrelation, out::AbstractVecOrMat{T}, surrogates::AbstractArray{T,3})
+    y = t.y
+    @inbounds for itrail = 1:Base.trailingsize(surrogates, 2)
+        μx = zero(T)
+        @simd for isurrogate = 1:size(surrogates, 1)
+            μx += surrogates[isurrogate, itrail]
+        end
+        μx /= size(surrogates, 1)
+        cov = zero(T)
+        xssq = zero(T)
+        @simd for isurrogate = 1:size(surrogates, 1)
+            centeredx = surrogates[isurrogate, itrail] - μx
+            cov += centeredx*y[isurrogate]
+            xssq += abs2(centeredx)
+        end
+        out[itrail] = -cov/sqrt(xssq*t.yssq)
+    end
+end
+
+function computestat!{T<:Real,S}(t::JackknifeCorrelation, out::AbstractMatrix{T}, work::Tuple{Any, Array{S,3}},
+                                 X::AbstractVecOrMat{Complex{T}})
+    surrogates = JackknifeSurrogatesOutput(out, work[2])
+    computestat!(t.transform, surrogates, work[1], X)
+    jackknife_cor!(t, out, work[2])
+    out
+end
+function computestat!{T<:Real,S}(t::JackknifeCorrelation, out::AbstractMatrix{T}, work::Tuple{Any, Array{S,3}},
+                                 X::AbstractVecOrMat{Complex{T}},
+                                 Y::AbstractVecOrMat{Complex{T}})
+    surrogates = JackknifeSurrogatesOutput(out, work[2])
+    computestat!(t.transform, surrogates, work[1], X, Y)
+    jackknife_cor!(t, out, work[2])
     out
 end
 
