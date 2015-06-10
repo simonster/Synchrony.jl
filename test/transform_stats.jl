@@ -152,6 +152,7 @@ corvec = randn(size(csinput, 1))
 # Generate bootstrap weights
 bsindices = rand(1:size(csinput, 1), size(csinput, 1), 10)
 permindices = Permutation(Coherence(), size(csinput, 1), 10).indices
+jcpermindices = Permutation(Coherence(), div(size(csinput, 1), nmulti), 10).indices
 groups = Vector{Tuple{Int,Int}}[[(1, 2)], [(3, 2)], [(1, 2), (2, 3)]]
 
 # Single input tests of nested stats
@@ -173,6 +174,17 @@ for stat in [Coherence(), Coherency(), MeanPhaseDiff(), PLV(), PPC(), PLI(), PLI
     @test_approx_eq_eps jackknife_bias(jn) (size(csinput, 1)-1)*(squeeze(mean(jnsurrogates, 1), 1) - trueval) sqrt(eps())
     @test_approx_eq jackknife_var(jn) jnvar
 
+    # Test MultiJackknifeSurrogates
+    mjnsurrogates = zeros(eltype(trueval), div(size(csinput, 1), nmulti), size(csinput, 2), size(csinput, 2))
+    for i = 1:size(mjnsurrogates, 1)
+        mjnsurrogates[i, :, :] = computestat(stat, csinput[[1:(i-1)*nmulti; i*nmulti+1:size(csinput, 1)], :])
+    end
+    mjnvar = squeeze(var(mjnsurrogates, 1, corrected=false), 1)*(size(mjnsurrogates, 1)-1)
+    jn = computestat(MultiJackknifeSurrogates(stat, nmulti), csinput)
+    @test_approx_eq jn.trueval trueval
+    @test_approx_eq_eps jackknife_bias(jn) (size(mjnsurrogates, 1)-1)*(squeeze(mean(mjnsurrogates, 1), 1) - trueval) sqrt(eps())
+    @test_approx_eq jackknife_var(jn) mjnvar
+
     # Test Jackknife
     a = Jackknife(stat)
     jn = computestat(Jackknife(stat), csinput)
@@ -193,17 +205,6 @@ for stat in [Coherence(), Coherency(), MeanPhaseDiff(), PLV(), PPC(), PLI(), PLI
     @test_approx_eq jn.trueval [trueval[1, 2], trueval[2, 3], (trueval[1, 2] + trueval[2, 3])/2]
     est2 = mean([jnsurrogates[:, 1, 2] jnsurrogates[:, 2, 3]], 2)
     @test_approx_eq jn.var [jnvar[1, 2], jnvar[2, 3], var(est2, corrected=false)*(size(csinput, 1)-1)]
-
-    # Test MultiJackknifeSurrogates
-    estimates = zeros(eltype(trueval), div(size(csinput, 1), nmulti), size(csinput, 2), size(csinput, 2))
-    for i = 1:size(estimates, 1)
-        estimates[i, :, :] = computestat(stat, csinput[[1:(i-1)*nmulti; i*nmulti+1:size(csinput, 1)], :])
-    end
-    jnvar = squeeze(var(estimates, 1, corrected=false), 1)*(size(estimates, 1)-1)
-    jn = computestat(MultiJackknifeSurrogates(stat, nmulti), csinput)
-    @test_approx_eq jn.trueval trueval
-    @test_approx_eq_eps jackknife_bias(jn) (size(estimates, 1)-1)*(squeeze(mean(estimates, 1), 1) - trueval) sqrt(eps())
-    @test_approx_eq jackknife_var(jn) jnvar
 
     # Test Bootstrap
     estimates = zeros(eltype(trueval), size(csinput, 2), size(csinput, 2), size(bsindices, 2))
@@ -237,6 +238,12 @@ for stat in [Coherence(), Coherency(), MeanPhaseDiff(), PLV(), PPC(), PLI(), PLI
         end
         jcperm = computestat(Permutation(JackknifeCorrelation(stat, corvec), permindices), csinput)
         @test_approx_eq jcperm trueperm
+
+        trueperm = zeros(size(csinput, 2), size(csinput, 2), size(jcpermindices, 2))
+        for i = 1:size(jcpermindices, 2)
+            trueperm[:, :, i] = -reshape(cor(reshape(mjnsurrogates, size(jcpermindices, 1), size(csinput, 2)^2)[jcpermindices[:, i], :], corvec[1:size(jcpermindices, 1)], vardim=1), size(csinput, 2), size(csinput, 2))
+        end
+        jcperm = computestat(Permutation(JackknifeCorrelation(stat, nmulti, corvec[1:size(jcpermindices, 1)]), jcpermindices), csinput)
     else
         @test_throws ArgumentError computestat(Permutation(JackknifeCorrelation(stat, corvec), permindices), csinput)
     end
@@ -261,6 +268,17 @@ for stat in [Coherence(), Coherency(), MeanPhaseDiff(), PLV(), PPC(), PLI(), PLI
     @test_approx_eq_eps jackknife_bias(jn) (size(csinput, 1)-1)*(squeeze(mean(jnsurrogates, 1), 1) - trueval) sqrt(eps())
     @test_approx_eq jackknife_var(jn) jnvar
 
+    # Test MultiJackknifeSurrogates
+    mjnsurrogates = zeros(eltype(trueval), div(size(csinput, 1), nmulti), size(csinput, 2), size(csinput2, 2))
+    for i = 1:size(mjnsurrogates, 1)
+        mjnsurrogates[i, :, :] = computestat(stat, csinput[[1:(i-1)*nmulti; i*nmulti+1:size(csinput, 1)], :], csinput2[[1:(i-1)*nmulti; i*nmulti+1:size(csinput, 1)], :])
+    end
+    mjnvar = squeeze(var(mjnsurrogates, 1, corrected=false), 1)*(size(mjnsurrogates, 1)-1)
+    jn = computestat(MultiJackknifeSurrogates(stat, nmulti), csinput, csinput2)
+    @test_approx_eq jn.trueval trueval
+    @test_approx_eq_eps jackknife_bias(jn) (size(mjnsurrogates, 1)-1)*(squeeze(mean(mjnsurrogates, 1), 1) - trueval) sqrt(eps())
+    @test_approx_eq jackknife_var(jn) mjnvar
+
     # Test Jackknife
     jn = computestat(Jackknife(stat), csinput, csinput2)
     @test_approx_eq jn.trueval trueval
@@ -280,17 +298,6 @@ for stat in [Coherence(), Coherency(), MeanPhaseDiff(), PLV(), PPC(), PLI(), PLI
     @test_approx_eq jn.trueval [trueval[1, 2], trueval[2, 3], (trueval[1, 2] + trueval[2, 3])/2]
     est2 = mean([jnsurrogates[:, 1, 2] jnsurrogates[:, 2, 3]], 2)
     @test_approx_eq jn.var [jnvar[1, 2], jnvar[2, 3], var(est2, corrected=false)*(size(csinput, 1)-1)]
-
-    # Test MultiJackknifeSurrogates
-    estimates = zeros(eltype(trueval), div(size(csinput, 1), nmulti), size(csinput, 2), size(csinput2, 2))
-    for i = 1:size(estimates, 1)
-        estimates[i, :, :] = computestat(stat, csinput[[1:(i-1)*nmulti; i*nmulti+1:size(csinput, 1)], :], csinput2[[1:(i-1)*nmulti; i*nmulti+1:size(csinput, 1)], :])
-    end
-    jnvar = squeeze(var(estimates, 1, corrected=false), 1)*(size(estimates, 1)-1)
-    jn = computestat(MultiJackknifeSurrogates(stat, nmulti), csinput, csinput2)
-    @test_approx_eq jn.trueval trueval
-    @test_approx_eq_eps jackknife_bias(jn) (size(estimates, 1)-1)*(squeeze(mean(estimates, 1), 1) - trueval) sqrt(eps())
-    @test_approx_eq jackknife_var(jn) jnvar
 
     # Test Bootstrap
     estimates = zeros(eltype(trueval), size(csinput, 2), size(csinput2, 2), size(bsindices, 2))
@@ -323,7 +330,12 @@ for stat in [Coherence(), Coherency(), MeanPhaseDiff(), PLV(), PPC(), PLI(), PLI
             trueperm[:, :, i] = -reshape(cor(reshape(jnsurrogates, size(csinput, 1), size(csinput, 2)*size(csinput2, 2))[permindices[:, i], :], corvec, vardim=1), size(csinput, 2), size(csinput2, 2))
         end
         jcperm = computestat(Permutation(JackknifeCorrelation(stat, corvec), permindices), csinput, csinput2)
-        @test_approx_eq jcperm trueperm
+
+        trueperm = zeros(size(csinput, 2), size(csinput, 2), size(jcpermindices, 2))
+        for i = 1:size(jcpermindices, 2)
+            trueperm[:, :, i] = -reshape(cor(reshape(mjnsurrogates, size(jcpermindices, 1), size(csinput, 2)*size(csinput2, 2))[jcpermindices[:, i], :], corvec[1:size(jcpermindices, 1)], vardim=1), size(csinput, 2), size(csinput2, 2))
+        end
+        jcperm = computestat(Permutation(JackknifeCorrelation(stat, nmulti, corvec[1:size(jcpermindices, 1)]), jcpermindices), csinput, csinput2)
     else
         @test_throws ArgumentError computestat(Permutation(JackknifeCorrelation(stat, corvec), permindices), csinput, csinput2)
     end
