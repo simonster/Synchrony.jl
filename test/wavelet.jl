@@ -1,5 +1,5 @@
-using Synchrony, Base.Test
-datadir = joinpath(Pkg.dir("Synchrony"), "test", "data")
+using Synchrony2, Base.Test
+datadir = joinpath(Pkg.dir("Synchrony2"), "test", "data")
 
 # Test Morlet wavelet bases
 #
@@ -11,16 +11,17 @@ datadir = joinpath(Pkg.dir("Synchrony"), "test", "data")
 # to the length of the FFT, which eliminates the need to normalize
 # the output of the inverse FFT.
 d1 = [wavebases(MorletWavelet([0.1], 5), 1024) * 1024; zeros(511, 1)]
-d2 = float64(readdlm(joinpath(datadir, "morlet_bases_f_0.1_k0_5.txt")))
+d2 = map(Float64, readdlm(joinpath(datadir, "morlet_bases_f_0.1_k0_5.txt")))
 @test_approx_eq d1 d2
 
 # Test Morlet wavelet by comparing output for a 0.1 Hz oscillation
 # embedded in white noise
-test_in = float64(readdlm(joinpath(datadir, "wavelet_test_in.txt"))[:])
-foi = float64(readdlm(joinpath(datadir, "wavelet_test_foi.txt"))[:])
+test_in = map(Float64, readdlm(joinpath(datadir, "wavelet_test_in.txt"))[:])
+foi = map(Float64, readdlm(joinpath(datadir, "wavelet_test_foi.txt"))[:])
 d1 = cwt(test_in, MorletWavelet(foi, 5))
-d2 = complex(float64(readdlm(joinpath(datadir, "wavelet_test_out_re.txt"), '\t')), float64(readdlm(joinpath(datadir, "wavelet_test_out_im.txt"), '\t')))
-coi_periods = float64(readdlm(joinpath(datadir, "wavelet_test_coi.txt"))[:])
+d2 = complex(map(Float64, readdlm(joinpath(datadir, "wavelet_test_out_re.txt"), '\t')),
+             map(Float64, readdlm(joinpath(datadir, "wavelet_test_out_im.txt"), '\t')))
+coi_periods = map(Float64, readdlm(joinpath(datadir, "wavelet_test_coi.txt"))[:])
 for j = 1:length(foi)
     period = 1/foi[j]
     for i = 1:length(coi_periods)
@@ -56,7 +57,7 @@ y[500] = 1/3
 y[501] = 2/3
 foi = 2.^(0:0.25:7)
 w = MorletWavelet(foi, 5)
-cois = iceil(tstd(w)*2*1000)
+cois = ceil(Int, tstd(w)*2*1000)
 z1 = cwt(y, w, 1000)
 y[500] = NaN
 z2 = cwt(y, w, 1000)

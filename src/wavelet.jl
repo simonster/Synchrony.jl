@@ -120,14 +120,14 @@ end
 #
 # Functions for applying wavelets to data
 #
-immutable ContinuousWaveletTransform{T,S}
+immutable ContinuousWaveletTransform{T,S,P1,P2}
     fftin::Vector{T}
     fftout::Vector{S}
     ifftwork::Vector{S}
     bases::Array{T,2}
     coi::Vector{T}
-    p1::FFTW.Plan{T}
-    p2::FFTW.Plan{S}
+    p1::P1
+    p2::P2
 end
 
 function ContinuousWaveletTransform{T}(w::MotherWavelet{T}, nfft::Int, fs::Real=1;
@@ -137,9 +137,7 @@ function ContinuousWaveletTransform{T}(w::MotherWavelet{T}, nfft::Int, fs::Real=
     ifftwork = zeros(Complex{T}, nfft)
     bases = wavebases(w, nfft, fs)
     length(coi) == size(bases, 2) || isempty(coi) || error("length of coi must match number of frequencies")
-    p1 = FFTW.Plan(fftin, fftout, 1, FFTW.ESTIMATE, FFTW.NO_TIMELIMIT)
-    p2 = FFTW.Plan(ifftwork, ifftwork, 1, FFTW.BACKWARD, FFTW.ESTIMATE, FFTW.NO_TIMELIMIT)
-    ContinuousWaveletTransform(fftin, fftout, ifftwork, bases, coi, p1, p2)
+    ContinuousWaveletTransform(fftin, fftout, ifftwork, bases, coi, plan_rfft(fftin), plan_bfft!(ifftwork))
 end
 
 function evaluate!{T,S<:FloatingPoint}(out::Array{Complex{S}, 2}, t::ContinuousWaveletTransform{T},
@@ -204,7 +202,7 @@ function evaluate!{T,S<:FloatingPoint}(out::Array{Complex{S}, 2}, t::ContinuousW
         discard_sample_indices = find(discard_samples)
 
         # Perform FFT of padded signal
-        FFTW.execute(T, t.p1.plan)
+        A_mul_B!(fftout, t.p1, fftin)
 
         for k = 1:size(bases, 2)
             # Multiply by wavelet
@@ -223,14 +221,14 @@ function evaluate!{T,S<:FloatingPoint}(out::Array{Complex{S}, 2}, t::ContinuousW
             ifftwork[size(bases, 1)+1:nfft] = zero(Complex{T})
 
             # Perform FFT
-            FFTW.execute(T, t.p2.plan)
+            A_mul_B!(ifftwork, t.p2, ifftwork)
 
             # Copy to output array
             copy!(out, nsignal*(k-1)+1, ifftwork, 1, nsignal)
 
             if !isempty(coi)
                 # Set NaNs at edges
-                coi_length = iceil(coi[k])
+                coi_length = ceil(Int, coi[k])
                 out[1:min(coi_length, nsignal), k] = NaN
                 out[max(nsignal-coi_length+1, 1):end, k] = NaN
 
@@ -251,7 +249,7 @@ function evaluate!{T,S<:FloatingPoint}(out::Array{Complex{S}, 2}, t::ContinuousW
 end
 
 # Friendly interface to ContinuousWaveletTransform
-function cwt{T <: Real}(signal::Vector{T}, w::MotherWavelet, fs::Real=1)
+function cwt{T<:Real}(signal::Vector{T}, w::MotherWavelet, fs::Real=1)
     t = ContinuousWaveletTransform(w, nextfastfft(length(signal)), fs)
     evaluate!(Array(Complex{T}, length(signal), size(t.bases, 2)), t, signal)
 end
