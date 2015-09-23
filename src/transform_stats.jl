@@ -609,12 +609,13 @@ end
 # Correlation of jackknife surrogates with another statistic
 #
 
-immutable JackknifeCorrelation{R<:Statistic,S,T<:FloatingPoint} <: PairwiseStatistic
+immutable JackknifeCorrelation{R<:Statistic,S,T<:FloatingPoint,F} <: PairwiseStatistic
     transform::S
     y::Vector{T}
     yssq::T
+    f::F
 
-    function JackknifeCorrelation(transform, y)
+    function JackknifeCorrelation(transform, y, f)
         μy = mean(y)
         yssq = zero(eltype(y))
         centeredy = zeros(eltype(y), length(y))
@@ -622,13 +623,13 @@ immutable JackknifeCorrelation{R<:Statistic,S,T<:FloatingPoint} <: PairwiseStati
             centeredy[i] = y[i] - μy
             yssq += abs2(y[i] - μy)
         end
-        new(transform, centeredy, yssq)
+        new(transform, centeredy, yssq, f)
     end
 end
-JackknifeCorrelation(t::PairwiseStatistic, y::AbstractVector) =
-    JackknifeCorrelation{typeof(t),JackknifeSurrogates{typeof(t)},eltype(y)}(JackknifeSurrogates(t), float(y))
-JackknifeCorrelation(t::PairwiseStatistic, n::Int, y::AbstractVector) =
-    JackknifeCorrelation{typeof(t),MultiJackknifeSurrogates{typeof(t)},eltype(y)}(MultiJackknifeSurrogates(t, n), float(y))
+JackknifeCorrelation(t::PairwiseStatistic, y::AbstractVector, f=Base.IdFun()) =
+    JackknifeCorrelation{typeof(t),JackknifeSurrogates{typeof(t)},eltype(y),typeof(f)}(JackknifeSurrogates(t), float(y), f)
+JackknifeCorrelation(t::PairwiseStatistic, n::Int, y::AbstractVector, f=Base.IdFun()) =
+    JackknifeCorrelation{typeof(t),MultiJackknifeSurrogates{typeof(t)},eltype(y),typeof(f)}(MultiJackknifeSurrogates(t, n), float(y), f)
 
 Base.eltype{T<:Real}(::JackknifeCorrelation, X::AbstractArray{Complex{T}}) = T
 
@@ -648,6 +649,7 @@ function jackknife_cor!{T<:Real}(t::JackknifeCorrelation, out::AbstractVecOrMat{
     @inbounds for itrail = 1:Base.trailingsize(surrogates, 2)
         μx = zero(T)
         @simd for isurrogate = 1:size(surrogates, 1)
+            surrogates[isurrogate, itrail] = t.f(surrogates[isurrogate, itrail])
             μx += surrogates[isurrogate, itrail]
         end
         μx /= size(surrogates, 1)
@@ -927,6 +929,7 @@ function perm_jackknife_cor!{T<:Real}(t::JackknifeCorrelation, out::AbstractArra
     @inbounds for itrail = 1:trailsize
         μx = zero(T)
         @simd for isurrogate = 1:size(surrogates, 1)
+            surrogates[isurrogate, itrail] = t.f(surrogates[isurrogate, itrail])
             μx += surrogates[isurrogate, itrail]
         end
         μx /= size(surrogates, 1)
@@ -1002,4 +1005,4 @@ include("transforms/jammalamadaka.jl")
 include("transforms/juppmardia.jl")
 include("transforms/modulationindex.jl")
 include("transforms/uniformscores.jl")
-# include("transforms/vmconcentration.jl")
+include("transforms/vmconcentration.jl")

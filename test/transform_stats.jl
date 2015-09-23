@@ -193,8 +193,13 @@ for stat in [Coherence(), Coherency(), MeanPhaseDiff(), PLV(), PPC(), PLI(), PLI
 
     # Test JackknifeCorrelation
     if eltype(trueval) <: Real
-        truejc = -reshape(cor(reshape(jnsurrogates, size(csinput, 1), size(csinput, 2)*size(csinput, 2)), corvec, vardim=1), size(csinput, 2), size(csinput, 2))
+        jns = reshape(jnsurrogates, size(csinput, 1), size(csinput, 2)*size(csinput, 2))
+        truejc = -reshape(cor(jns, corvec, vardim=1), size(csinput, 2), size(csinput, 2))
         jc = computestat(JackknifeCorrelation(stat, corvec), csinput)
+        @test_approx_eq jc truejc
+        truejc = -reshape(cor(abs2(jns), corvec, vardim=1), size(csinput, 2), size(csinput, 2))
+        truejc[squeeze(all(jnsurrogates .== jnsurrogates[1, :, :], 1), 1)] = NaN # fixup for inaccurate cor std
+        jc = computestat(JackknifeCorrelation(stat, corvec, Base.Abs2Fun()), csinput)
         @test_approx_eq jc truejc
     else
         @test_throws ArgumentError computestat(JackknifeCorrelation(stat, corvec), csinput)
@@ -288,6 +293,9 @@ for stat in [Coherence(), Coherency(), MeanPhaseDiff(), PLV(), PPC(), PLI(), PLI
     if eltype(trueval) <: Real
         truejc = -reshape(cor(reshape(jnsurrogates, size(csinput, 1), size(csinput, 2)*size(csinput2, 2)), corvec, vardim=1), size(csinput, 2), size(csinput2, 2))
         jc = computestat(JackknifeCorrelation(stat, corvec), csinput, csinput2)
+        @test_approx_eq jc truejc
+        truejc = -reshape(cor(abs2(reshape(jnsurrogates, size(csinput, 1), size(csinput, 2)*size(csinput2, 2))), corvec, vardim=1), size(csinput, 2), size(csinput2, 2))
+        jc = computestat(JackknifeCorrelation(stat, corvec, Base.Abs2Fun()), csinput, csinput2)
         @test_approx_eq jc truejc
     else
         @test_throws ArgumentError computestat(JackknifeCorrelation(stat, corvec), csinput, csinput2)
