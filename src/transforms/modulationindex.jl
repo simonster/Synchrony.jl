@@ -67,7 +67,7 @@ end
 
 # X is phase, Y is amplitude
 function computestat!{T<:Real}(t::HurtadoModulationIndex, out::AbstractMatrix{T},
-                               work::Tuple{Matrix{Uint8}, Matrix{Int32}, Vector{T}, Vector{Float64}},
+                               work::Tuple{Matrix{UInt8}, Matrix{Int32}, Vector{T}, Vector{Float64}},
                                X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
     nbins = t.nbins
     phasebin, ninbin, amp, meanamp = work
@@ -96,7 +96,7 @@ allocwork{T<:Real}(t::AbstractJackknifeSurrogates{HurtadoModulationIndex}, X::Ab
     (Array(UInt8, size(X, 1), size(X, 2)), Array(Int32, t.transform.nbins, nchannels(X)),
      Array(T, size(X, 1)), Array(Float64, t.transform.nbins), Array(Int32, t.transform.nbins), Array(Float64, t.transform.nbins))
 function computestat!{T<:Real}(t::AbstractJackknifeSurrogates{HurtadoModulationIndex}, out::JackknifeSurrogatesOutput,
-                               work::Tuple{Matrix{Uint8}, Matrix{Int32}, Vector{T}, Vector{Float64}, Vector{Int32}, Vector{Float64}},
+                               work::Tuple{Matrix{UInt8}, Matrix{Int32}, Vector{T}, Vector{Float64}, Vector{Int32}, Vector{Float64}},
                                X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
     trueval = out.trueval
     surrogates = out.surrogates

@@ -19,10 +19,10 @@ finish(::Type{PLI}, x::Complex, n::Int) = abs(x)/n
 # doi:10.1016/j.neuroimage.2011.01.055
 immutable PLI2Unbiased <: PairwiseStatistic; end
 
-accumulator{T<:Real}(::Union(Type{PLI}, Type{PLI2Unbiased}), ::Type{T}) = zero(Complex{T})
-accumulate{T<:Real}(::Union(Type{PLI}, Type{PLI2Unbiased}), x::Complex{T},
+accumulator{T<:Real}(::Union{Type{PLI}, Type{PLI2Unbiased}}, ::Type{T}) = zero(Complex{T})
+accumulate{T<:Real}(::Union{Type{PLI}, Type{PLI2Unbiased}}, x::Complex{T},
                     v1::Complex{T}, v2::Complex{T}) = (x + sign(imag(conj(v1)*v2)))
-accumulate{T<:Real}(::Union(Type{PLI}, Type{PLI2Unbiased}), x::Complex{T},
+accumulate{T<:Real}(::Union{Type{PLI}, Type{PLI2Unbiased}}, x::Complex{T},
                     v1::Complex{T}, v2::Complex{T}, weight::Real) = (x + sign(imag(conj(v1)*v2))*weight)
 finish(::Type{PLI2Unbiased}, x::Complex, n::Int) = abs2(x)/(n*(n-1)) - 1/(n-1)
 
@@ -79,7 +79,7 @@ finish(::Type{WPLI2Debiased}, x::WPLI2DebiasedAccumulator,
 #
 # Functions applicable to all phase lag-style metrics
 #
-typealias PLStat Union(PLI, PLI2Unbiased, WPLI, WPLI2Debiased)
+typealias PLStat Union{PLI, PLI2Unbiased, WPLI, WPLI2Debiased}
 Base.eltype{T<:Real}(::PLStat, X::AbstractArray{Complex{T}}) = T
 diagval{T<:PLStat}(::Type{T}) = 0
 
@@ -87,7 +87,7 @@ allocwork{T<:Complex}(::PLStat, X::AbstractVecOrMat{T}, Y::AbstractVecOrMat{T}=X
     nothing
 
 # Single input matrix
-function computestat!{S<:PLStat, T<:Real}(t::S, out::AbstractMatrix{T}, work::Nothing,
+function computestat!{S<:PLStat, T<:Real}(t::S, out::AbstractMatrix{T}, work::Void,
                                           X::AbstractVecOrMat{Complex{T}})
     chkinput(out, X)
     for k = 1:size(X, 2), j = 1:k
@@ -101,7 +101,7 @@ function computestat!{S<:PLStat, T<:Real}(t::S, out::AbstractMatrix{T}, work::No
 end
 
 # Two input matrices
-function computestat!{S<:PLStat, T<:Real}(t::S, out::AbstractMatrix{T}, work::Nothing,
+function computestat!{S<:PLStat, T<:Real}(t::S, out::AbstractMatrix{T}, work::Void,
                                           X::AbstractVecOrMat{Complex{T}},
                                           Y::AbstractVecOrMat{Complex{T}})
     chkinput(out, X, Y)

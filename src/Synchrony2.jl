@@ -20,7 +20,7 @@ function frequencies(nfft::Int, fs::Real, fmin::Real, fmax::Real=Inf)
 end
 
 # Compute frequencies based on data length, assuming padding to nextfastfft
-frequencies{T<:Real}(A::Union(AbstractVector{T}, AbstractMatrix{T}, AbstractArray{T,3}),
+frequencies{T<:Real}(A::Union{AbstractVector{T}, AbstractMatrix{T}, AbstractArray{T,3}},
                      fs::Real=1.0, fmin::Real=0.0, fmax::Real=Inf) =
     frequencies(nextfastfft(size(A, 1)), fs, fmin, fmax)
 
@@ -29,8 +29,7 @@ complextype{T<:Complex}(::Type{T}) = T
 complextype{T}(::Type{T}) = Complex{T}
 
 # Get preferred output type for a given input type
-outputtype{T<:FloatingPoint}(::Type{T}) = T
-outputtype(::Union(Type{Int8}, Type{Uint8}, Type{Int16}, Type{Uint16})) = Float64
+outputtype{T<:AbstractFloat}(::Type{T}) = T
 outputtype{T<:Real}(::Type{T}) = Float64
 
 include("transform_stats.jl")

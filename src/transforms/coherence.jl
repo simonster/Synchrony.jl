@@ -21,7 +21,7 @@ function computestat!{T<:Real}(::Coherency, out::AbstractMatrix{Complex{T}},
 end
 
 #
-# Coherence (as the square root of the correlation matrix)
+# Coherence (as the absolute value of the correlation matrix)
 #
 
 immutable Coherence <: PairwiseStatistic; end
@@ -50,13 +50,13 @@ surrogateval(::Coherence, v) = abs(v)
 surrogateval(::Coherency, v) = v
 
 # Single input matrix
-allocwork{T<:Real}(t::Union(AbstractJackknifeSurrogates{Coherency}, AbstractJackknifeSurrogates{Coherence}),
+allocwork{T<:Real}(t::Union{AbstractJackknifeSurrogates{Coherency}, AbstractJackknifeSurrogates{Coherence}},
                    X::AbstractVecOrMat{Complex{T}}) = (allocwork(t.transform, X), Array(T, div(size(X, 1), jnn(t)), size(X, 2)))
-accumulator_array(::AbstractJackknifeSurrogates{Coherency}, work::Nothing, out::AbstractMatrix) = out
+accumulator_array(::AbstractJackknifeSurrogates{Coherency}, work::Void, out::AbstractMatrix) = out
 accumulator_array(::AbstractJackknifeSurrogates{Coherence}, work::AbstractMatrix, out::AbstractMatrix) = work
-function computestat!{T<:Real}(t::Union(AbstractJackknifeSurrogates{Coherency}, AbstractJackknifeSurrogates{Coherence}),
+function computestat!{T<:Real}(t::Union{AbstractJackknifeSurrogates{Coherency}, AbstractJackknifeSurrogates{Coherence}},
                                out::JackknifeSurrogatesOutput,
-                               work::Tuple{Union{Matrix{Complex{T}}, Nothing}, Matrix{T}},
+                               work::Tuple{Union{Matrix{Complex{T}}, Void}, Matrix{T}},
                                X::AbstractVecOrMat{Complex{T}})
     stat = t.transform
     trueval = out.trueval
@@ -88,8 +88,7 @@ function computestat!{T<:Real}(t::Union(AbstractJackknifeSurrogates{Coherency}, 
             for idel = (i-1)*jnn(t)+1:i*jnn(t)
                 v -= conj(X[idel, j])*X[idel, k]
             end
-            # XXX maybe precompute sqrt for each channel and trial?
-            surrogates[i, j, k] = surrogateval(t.transform, v)*jnspec[i, j]*jnspec[i, k]
+            surrogates[i, j, k] = surrogateval(t.transform, v)*(jnspec[i, j]*jnspec[i, k])
         end
         for i = 1:size(surrogates, 1)
             surrogates[i, k, k] = 1
@@ -107,15 +106,15 @@ function computestat!{T<:Real}(t::Union(AbstractJackknifeSurrogates{Coherency}, 
 end
 
 # Two input matrices
-allocwork{T<:Real}(t::JackknifeSurrogates{Coherency}, X::AbstractVecOrMat{Complex{T}},
+allocwork{T<:Real}(t::AbstractJackknifeSurrogates{Coherency}, X::AbstractVecOrMat{Complex{T}},
                    Y::AbstractVecOrMat{Complex{T}}) =
     (nothing, cov2coh_work(X), cov2coh_work(Y), Array(T, div(size(X, 1), jnn(t)), size(X, 2)),
      Array(T, div(size(Y, 1), jnn(t)), size(Y, 2)))
-allocwork{T<:Real}(t::JackknifeSurrogates{Coherence}, X::AbstractVecOrMat{Complex{T}},
+allocwork{T<:Real}(t::AbstractJackknifeSurrogates{Coherence}, X::AbstractVecOrMat{Complex{T}},
                    Y::AbstractVecOrMat{Complex{T}}) =
     (Array(Complex{T}, nchannels(X), nchannels(Y)), cov2coh_work(X), cov2coh_work(Y),
      Array(T, div(size(X, 1), jnn(t)), size(X, 2)), Array(T, div(size(Y, 1), jnn(t)), size(Y, 2)))
-function computestat!{T<:Real,V}(t::Union(JackknifeSurrogates{Coherency}, JackknifeSurrogates{Coherence}),
+function computestat!{T<:Real,V}(t::Union{AbstractJackknifeSurrogates{Coherency}, AbstractJackknifeSurrogates{Coherence}},
                                  out::JackknifeSurrogatesOutput,
                                  work::Tuple{V, Array{T}, Array{T}, Matrix{T}, Matrix{T}},
                                  X::AbstractVecOrMat{Complex{T}}, Y::AbstractVecOrMat{Complex{T}})
@@ -155,11 +154,11 @@ function computestat!{T<:Real,V}(t::Union(JackknifeSurrogates{Coherency}, Jackkn
             v -= conj(X[idel, j])*Y[idel, k]
         end
         # XXX maybe precompute sqrt for each channel and trial?
-        surrogates[i, j, k] = surrogateval(t.transform, v)*Xjnspec[i, j]*Yjnspec[i, k]
+        surrogates[i, j, k] = surrogateval(t.transform, v)*(Xjnspec[i, j]*Yjnspec[i, k])
     end
 
     # Finish true value
-    if isa(t, JackknifeSurrogates{Coherence})
+    if isa(stat, Coherence)
         cov2coh!(trueval, X, Y, work[2], work[3], XYc, Base.AbsFun())
     else
         cov2coh!(trueval, X, Y, work[2], work[3], XYc, Base.IdFun())
