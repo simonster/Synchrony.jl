@@ -1,4 +1,4 @@
-using Synchrony2, Base.Test, CrossDecomposition
+using Synchrony, Base.Test, CrossDecomposition
 
 # Tests for statistics determined by cross spectrum
 angles = [

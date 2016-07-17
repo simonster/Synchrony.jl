@@ -1,5 +1,4 @@
 tests = [
-    "multitaper",
     "transform_stats",
     "wavelet",
     "point_field"

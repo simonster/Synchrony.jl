@@ -4,17 +4,16 @@ export spiketriggeredspectrum, pfcoherence, pfplv, pfppc0, pfppc1, pfppc2, pxcor
 # Perform tapered FFT of individual spikes embedded in a continuous signal
 #
 function spiketriggeredspectrum{T<:Integer,S<:Real}(points::AbstractVector{T}, field::AbstractVector{S},
-                                                    window::Range1{Int};
+                                                    window::UnitRange{Int};
                                                     nfft::Int=nextpow2(length(window)),
-                                                    freqrange::Range1{Int}=1:(nfft >> 1 + 1),
-                                                    tapers::Union(Vector, Matrix)=hanning(length(window)))#dpss(length(window), length(window)/fs*10))
+                                                    freqrange::UnitRange{Int}=1:(nfft >> 1 + 1),
+                                                    tapers::Union{AbstractVector, AbstractMatrix}=hanning(length(window)))
     n = length(window)
     nfreq = length(freqrange)
     npoints = length(points)
     nfield = length(field)
     dtype = outputtype(S)
 
-    # getindex() on ranges is a function call...
     freqoff = freqrange[1]-1
     winoff = window[1]-1
 
@@ -114,12 +113,6 @@ end
 # (2012). Improved measures of phase-coupling between spikes and the
 # Local Field Potential. Journal of Computational Neuroscience, 33(1),
 # 53–75. doi:10.1007/s10827-011-0374-4
-#
-# The code below computes these statistics using more efficient methods
-# than those described in Vinck et al. (2012). These efficient methods
-# are also used in FieldTrip (https://github.com/fieldtrip/fieldtrip),
-# although there is a bug in FieldTrip that makes its comptutations
-# incorrect. Derivation is available upon request.
 
 # Computes the sum of complex phases over third dimension
 function phasesum{T<:Real}(sts::Array{Complex{T},3})
@@ -161,7 +154,7 @@ end
 
 # Compute pfdiffsq with preallocated memory for out, pssum, and
 # pssqsum. out is assumed to be zeroed; pssum and pssqsum are not.
-function _pfdiffsq!{T}(out::Union(Vector{T}, Matrix{T}), pssum::Array{Complex{T},2}, pssqsum::Array{T,2},
+function _pfdiffsq!{T}(out::Union{Vector{T}, Matrix{T}}, pssum::Array{Complex{T},2}, pssqsum::Array{T,2},
                        pstrial::AbstractArray{Complex{T},3}, trials=1:size(pstrial, 3), idx::Int=1)
     fill!(pssum, zero(Complex{T}))
     fill!(pssqsum, zero(T))

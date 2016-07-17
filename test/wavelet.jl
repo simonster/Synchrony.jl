@@ -1,5 +1,5 @@
-using Synchrony2, Base.Test
-datadir = joinpath(Pkg.dir("Synchrony2"), "test", "data")
+using Synchrony, Base.Test
+datadir = joinpath(Pkg.dir("Synchrony"), "test", "data")
 
 # Test Morlet wavelet bases
 #
