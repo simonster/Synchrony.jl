@@ -62,7 +62,8 @@ function computestat!{T<:Real}(t::JackknifeSurrogates{Correlation},
     @inbounds for j = 1:size(X, 2)
         ssq = trueval[j, j]
         @simd for i = 1:size(surrogates, 1)
-            jninvmoment[i, j] = sqrt(1/(ssq - abs2(Xmμ[i, j])*multiplier))
+            v = ssq - abs2(Xmμ[i, j])*multiplier
+            jninvmoment[i, j] = sqrt(1/ifelse(v < 0, zero(v), v))
         end
     end
 

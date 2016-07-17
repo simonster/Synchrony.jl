@@ -707,7 +707,7 @@ function grouppairs!{T,R<:Statistic}(t::Jackknife{GroupMean{R}}, group_trueval::
     jnt = t.transform.transform
 
     # First compute means of groups and jackknife surrogates
-    @inbounds for ipairgroup = 1:ngroups(jnt)
+    for ipairgroup = 1:ngroups(jnt)
         m = zero(T)
         for ipair = jnt.offsets[ipairgroup]:jnt.offsets[ipairgroup+1]-1
             pairindex = jnt.indices[ipair]
@@ -748,7 +748,7 @@ end
 # Group jackknifing of n-d arrays
 function computestat!{R<:Statistic,S}(t::Jackknife{GroupMean{R}}, out::JackknifeOutput,
                                       work::Tuple{Any, JackknifeSurrogatesOutput{Array{S,2}, Array{S,3}}, Array{S,2}}, X::AbstractArray)
-    !isempty(X) || error(ArgumentError("X is empty"))
+    !isempty(X) || throw(ArgumentError("X is empty"))
     for i = 1:Base.trailingsize(X, 3)
         computestat!(JackknifeSurrogates(t.transform.transform.transform), work[2], work[1], unsafe_view(X, :, :, i))
         grouppairs!(t, unsafe_view(out.trueval, :, i), unsafe_view(out.var, :, i), work[3], work[2])
@@ -757,7 +757,7 @@ function computestat!{R<:Statistic,S}(t::Jackknife{GroupMean{R}}, out::Jackknife
 end
 function computestat!{R<:Statistic,T,S}(t::Jackknife{GroupMean{R}}, out::JackknifeOutput,
                                         work::Tuple{Any, JackknifeSurrogatesOutput{Array{S,2}, Array{S,3}}, Array{S,2}}, X::AbstractArray{T}, Y::AbstractArray{T})
-    !isempty(X) || error(ArgumentError("X is empty"))
+    !isempty(X) || throw(ArgumentError("X is empty"))
     for i = 1:Base.trailingsize(X, 3)
         computestat!(JackknifeSurrogates(t.transform.transform.transform), work[2], work[1], unsafe_view(X, :, :, i), unsafe_view(Y, :, :, i))
         grouppairs!(t, unsafe_view(out.trueval, :, i), unsafe_view(out.var, :, i), work[3], work[2])
