@@ -19,6 +19,7 @@ computestat!{T<:Real}(::PowerSpectrum, out::AbstractMatrix{T}, ::Void,
 #
 
 immutable CrossSpectrum <: PairwiseStatistic; end
+Base.eltype{T<:Real}(::CrossSpectrum, X::AbstractArray{Complex{T}}) = Complex{T}
 
 # Single input matrix
 allocwork{T<:Complex}(::CrossSpectrum, X::AbstractVecOrMat{T}) = nothing

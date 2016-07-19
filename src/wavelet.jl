@@ -141,7 +141,7 @@ function ContinuousWaveletTransform{T}(w::MotherWavelet{T}, nfft::Int, fs::Real=
 end
 
 function evaluate!{T,S<:AbstractFloat}(out::Array{Complex{S}, 2}, t::ContinuousWaveletTransform{T},
-                                       signal::Vector{T})
+                                       signal::AbstractVector{T})
     @inbounds begin
         fftin = t.fftin
         fftout = t.fftout
