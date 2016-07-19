@@ -1,16 +1,15 @@
-language: cpp
-compiler:
-    - gcc
+# Documentation: http://docs.travis-ci.com/user/languages/julia/
+language: julia
+os:
+  - linux
+  - osx
+julia:
+  - release
+  - nightly
 notifications:
-    email: false
-before_install:
-    - sudo add-apt-repository ppa:staticfloat/julia-deps -y
-    - sudo add-apt-repository ppa:staticfloat/julianightlies -y
-    - sudo apt-get update -qq -y
-    - sudo apt-get install git libpcre3-dev julia -y
-    - git config --global user.name "Travis User"
-    - git config --global user.email "travis@example.net"
-    - if [[ -a .git/shallow ]]; then git fetch --unshallow; fi
+  email: false
 script:
-    - julia -e 'versioninfo(); Pkg.init(); Pkg.add("CrossDecomposition"); Pkg.clone(pwd())'
-    - julia ./test/runtests.jl
+  - if [[ -a .git/shallow ]]; then git fetch --unshallow; fi
+  - julia -e 'Pkg.clone(pwd()); Pkg.build("Synchrony"); Pkg.test("Synchrony"; coverage=true)'
+after_success:
+  - julia -e 'cd(Pkg.dir("Synchrony")); Pkg.add("Coverage"); using Coverage; Codecov.submit(Codecov.process_folder())'
